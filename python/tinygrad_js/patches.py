@@ -1,4 +1,4 @@
-"""The (only) behavioural changes tinygrad-web makes to upstream tinygrad, applied at runtime by ``install()``.
+"""The (only) behavioural changes tinygrad.js makes to upstream tinygrad, applied at runtime by ``install()``.
 
 Each patch is small, guarded by a check that the upstream code still looks the way the patch expects, and listed in
 ``applied`` (reported to JavaScript as a diagnostic). See docs/COMPATIBILITY.md.
@@ -20,14 +20,14 @@ def realize_deviceless_on_default() -> None:
   from tinygrad.tensor import Tensor
   from tinygrad.device import Device
   orig = Tensor._buffer
-  if getattr(orig, "_tinygrad_web", False): return
+  if getattr(orig, "_tinygrad_js", False): return
   try: src = inspect.getsource(orig)
   except (OSError, TypeError): return
   if 'clone("CPU")' not in src: return  # not needed for this tinygrad version (e.g. 0.12 has no device-less tensors)
   def _buffer(self):
     if self.uop.device is None and Device.DEFAULT != "CPU": return orig(self.clone(Device.DEFAULT))
     return orig(self)
-  _buffer._tinygrad_web = True  # type: ignore[attr-defined]
+  _buffer._tinygrad_js = True  # type: ignore[attr-defined]
   _buffer.__doc__, _buffer.__wrapped__ = orig.__doc__, orig  # type: ignore[attr-defined]
   Tensor._buffer = _buffer
   applied.append("Tensor._buffer: device-less tensors are realized on Device.DEFAULT instead of CPU")

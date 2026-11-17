@@ -1,19 +1,19 @@
 # Upstream compatibility strategy
 
-tinygrad-web uses **unmodified upstream tinygrad wheels from PyPI**. It never forks or vendors tinygrad's source. Everything
-browser-specific lives in `python/tinygrad_web/` and is plugged in at runtime.
+tinygrad.js uses **unmodified upstream tinygrad wheels from PyPI**. It never forks or vendors tinygrad's source. Everything
+browser-specific lives in `python/tinygrad_js/` and is plugged in at runtime.
 
 ## Integration points
 
 | What | How | Where |
 |---|---|---|
-| `WEBGPU` device | `sys.modules["tinygrad.runtime.ops_webgpu"] = tinygrad_web.webgpu`. tinygrad resolves devices with `importlib.import_module("tinygrad.runtime.ops_<name>")`. | `__init__.py`, `webgpu.py` |
-| `CPU` device | `sys.modules["tinygrad.runtime.ops_cpu"] = tinygrad_web.cpu`, which is `CpuDevice(PythonDevice)`: tinygrad's own pure-Python device under the name `CPU`. Upstream's CPU backend needs clang/LLVM, which wasm doesn't have. | `cpu.py` |
+| `WEBGPU` device | `sys.modules["tinygrad.runtime.ops_webgpu"] = tinygrad_js.webgpu`. tinygrad resolves devices with `importlib.import_module("tinygrad.runtime.ops_<name>")`. | `__init__.py`, `webgpu.py` |
+| `CPU` device | `sys.modules["tinygrad.runtime.ops_cpu"] = tinygrad_js.cpu`, which is `CpuDevice(PythonDevice)`: tinygrad's own pure-Python device under the name `CPU`. Upstream's CPU backend needs clang/LLVM, which wasm doesn't have. | `cpu.py` |
 | Default device | Sets the `DEV` environment variable (or `helpers.DEV.value` if tinygrad is already imported). | `__init__.py` |
 | No multiprocessing | `PARALLEL=0` (tinygrad's own knob). | `__init__.py` |
 | **Behavioural patch** (1) | `Tensor._buffer` is wrapped so that device-less tensors are realized on `Device.DEFAULT` instead of the hard-coded `"CPU"`. It's only applied when upstream's source contains `clone("CPU")` (≥ 0.13). Numerics are identical; only where the kernel runs changes. | `patches.py` |
 
-`tinygrad_web.applied_patches()` (and `RuntimeInfo.diagnostics` in JS) reports which patches are active.
+`tinygrad_js.applied_patches()` (and `RuntimeInfo.diagnostics` in JS) reports which patches are active.
 
 ### The device contract the backend relies on
 

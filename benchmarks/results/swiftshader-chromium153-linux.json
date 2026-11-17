@@ -43,7 +43,7 @@
     "crossOriginIsolated": true,
     "diagnostics": [
       "the WebGPU adapter is a software fallback adapter (e.g. SwiftShader): kernels run through WebGPU but on the CPU",
-      "tinygrad-web patch: Tensor._buffer: device-less tensors are realized on Device.DEFAULT instead of CPU"
+      "tinygrad.js patch: Tensor._buffer: device-less tensors are realized on Device.DEFAULT instead of CPU"
     ]
   },
   "userAgent": "153.0.8010.12",

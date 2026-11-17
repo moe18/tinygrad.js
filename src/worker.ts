@@ -1,6 +1,6 @@
 /// <reference lib="webworker" />
 /**
- * tinygrad-web worker: owns Pyodide, upstream tinygrad and the WebGPU device. One worker = one Python environment.
+ * tinygrad.js worker: owns Pyodide, upstream tinygrad and the WebGPU device. One worker = one Python environment.
  * Started by Runtime (runtime.ts); all communication goes through the messages in protocol.ts.
  */
 import { WebGPUBridge } from "./bridge.js";
@@ -27,7 +27,7 @@ interface PyodideLike {
 
 const post = (m: FromWorker) => self.postMessage(m);
 const status = (message: string) => post({ type: "status", message });
-const LIB_DIR = "/home/pyodide/.tinygrad_web";
+const LIB_DIR = "/home/pyodide/.tinygrad_js";
 
 let py: PyodideLike | null = null;
 let bridge: WebGPUBridge | null = null;
@@ -57,7 +57,7 @@ function lockDownNetwork(): void {
     try {
       Object.defineProperty(self, name, {
         configurable: false, enumerable: false,
-        get() { throw new Error(`network access (${name}) is disabled in this tinygrad-web runtime`); },
+        get() { throw new Error(`network access (${name}) is disabled in this tinygrad.js runtime`); },
       });
     } catch { /* not present in this browser */ }
   }
@@ -75,7 +75,7 @@ async function init(config: InitConfig): Promise<RuntimeInfo> {
   const gpuPromise = wantGpu
     ? (async () => {
         const s = performance.now();
-        if (!hasJSPI()) throw new Error("this browser lacks WebAssembly JSPI (WebAssembly.Suspending), which tinygrad-web needs to read GPU results synchronously from Python");
+        if (!hasJSPI()) throw new Error("this browser lacks WebAssembly JSPI (WebAssembly.Suspending), which tinygrad.js needs to read GPU results synchronously from Python");
         try { return await WebGPUBridge.create({ maxBufferMemory: config.maxGpuMemoryBytes }); }
         finally { timings.webgpuMs = performance.now() - s; }
       })().catch((e: unknown) => { gpuError = e instanceof Error ? e.message : String(e); return null; })
@@ -115,12 +115,12 @@ async function init(config: InitConfig): Promise<RuntimeInfo> {
 
   status("importing tinygrad");
   s = performance.now();
-  if (bridge) py.registerJsModule("_tinygrad_web_bridge", bridge);
+  if (bridge) py.registerJsModule("_tinygrad_js_bridge", bridge);
   py.runPython(`
 import sys
 sys.path.insert(0, ${JSON.stringify(LIB_DIR)})
-import tinygrad_web, tinygrad_web._runner
-tinygrad_web.install(${bridge ? "__import__('_tinygrad_web_bridge')" : "None"}, default_device=${JSON.stringify(device)})
+import tinygrad_js, tinygrad_js._runner
+tinygrad_js.install(${bridge ? "__import__('_tinygrad_js_bridge')" : "None"}, default_device=${JSON.stringify(device)})
 import tinygrad
 from tinygrad import Tensor, Device
 assert Device.DEFAULT == ${JSON.stringify(device)}, Device.DEFAULT
@@ -129,8 +129,8 @@ assert Device.DEFAULT == ${JSON.stringify(device)}, Device.DEFAULT
     // open the device now so that errors surface during init rather than in the first user run
     await py.runPythonAsync("from tinygrad import Device; Device['WEBGPU']");
   }
-  const patches = py.runPython("tinygrad_web.applied_patches()") as PyProxyLike;
-  for (const p of patches.toJs() as string[]) diagnostics.push(`tinygrad-web patch: ${p}`);
+  const patches = py.runPython("tinygrad_js.applied_patches()") as PyProxyLike;
+  for (const p of patches.toJs() as string[]) diagnostics.push(`tinygrad.js patch: ${p}`);
   patches.destroy();
   timings.tinygradImportMs = performance.now() - s;
 
@@ -170,7 +170,7 @@ async function run(id: number, code: string): Promise<RunReply> {
   currentRun = id;
   if (interruptBuffer) Atomics.store(interruptBuffer, 0, 0);
   const before: GpuStats | null = bridge ? { ...bridge.counters } : null;
-  const runFn = (py.globals.get("tinygrad_web") as { _runner: { run: (c: string) => Promise<PyProxyLike> } })._runner.run;
+  const runFn = (py.globals.get("tinygrad_js") as { _runner: { run: (c: string) => Promise<PyProxyLike> } })._runner.run;
   const proxy = await runFn(code);
   const r = proxy.toJs({ dict_converter: Object.fromEntries }) as {
     ok: boolean; result?: string | null; type?: string; message?: string; traceback?: string; duration_ms: number;
@@ -204,7 +204,7 @@ self.onmessage = (ev: MessageEvent<ToWorker>) => {
           if (info && bridge) info = { ...info, gpu: bridge.info() };
           value = info;
           break;
-        case "reset": py?.runPython("import tinygrad_web._runner as r; r.reset_globals()"); break;
+        case "reset": py?.runPython("import tinygrad_js._runner as r; r.reset_globals()"); break;
         case "dispose": bridge?.destroy(); bridge = null; break;
       }
       post({ type: "reply", id: msg.id, ok: true, value });

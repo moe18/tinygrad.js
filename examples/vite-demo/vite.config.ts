@@ -5,8 +5,8 @@ import { defineConfig } from "vite";
 const isolation = { "Cross-Origin-Opener-Policy": "same-origin", "Cross-Origin-Embedder-Policy": "require-corp" };
 
 export default defineConfig({
-  // tinygrad-web locates its worker and tinygrad wheel with `new URL(..., import.meta.url)`; pre-bundling would break that.
-  optimizeDeps: { exclude: ["tinygrad-web"] },
+  // tinygrad.js locates its worker and tinygrad wheel with `new URL(..., import.meta.url)`; pre-bundling would break that.
+  optimizeDeps: { exclude: ["tinygrad.js"] },
   server: { headers: isolation },
   preview: { headers: isolation },
   base: "./", // relocatable build: serve dist/ from any path

@@ -1,4 +1,4 @@
-# tinygrad-web benchmarks. Runs unchanged in the browser (tinygrad-web) and natively (`DEV=CPU python bench.py`).
+# tinygrad.js benchmarks. Runs unchanged in the browser (tinygrad.js) and natively (`DEV=CPU python bench.py`).
 # Prints one line: BENCH_JSON:{...}. Configure with BENCH_DEVICES / BENCH_QUICK in the environment or globals.
 import json, os, statistics, time
 from tinygrad import Tensor, Device, TinyJit, nn

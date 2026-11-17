@@ -1,5 +1,5 @@
 # Shared helpers for test programs. The programs run both natively (reference: upstream tinygrad, DEV=CPU)
-# and in the browser (tinygrad-web, DEV=WEBGPU). They print one line "RESULT_JSON:{...}".
+# and in the browser (tinygrad.js, DEV=WEBGPU). They print one line "RESULT_JSON:{...}".
 import json
 import numpy as np
 from tinygrad import Tensor, Device

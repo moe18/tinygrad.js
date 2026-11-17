@@ -1,6 +1,6 @@
 # Research notes: running upstream tinygrad in the browser
 
-Research for tinygrad-web, done in November 2026 inside a Linux container with headless Chromium 153. Everything
+Research for tinygrad.js, done in November 2026 inside a Linux container with headless Chromium 153. Everything
 marked **tested** was run here. Everything else comes from reading source code or package metadata, and says so.
 
 Network note: the container could reach PyPI, npm, GitHub git/raw/release downloads and `api.github.com` search. It
@@ -36,7 +36,7 @@ Answers to the brief's questions:
 | 3. JSPI / Asyncify / other? | None. Python blocks on `socket.recv`, so the network is the sync boundary. |
 | 4. tinygrad / Pyodide versions | A tinygrad fork as of Oct 2024 (~0.9.2/0.10 era, using `requestAdapterInfo()`, which has since been removed from browsers). No Pyodide. |
 | 5. Open source / license | Yes. MIT, inherited from tinygrad ("Copyright (c) 2024, the tiny corp"). |
-| 6. Reusable in a maintained library? | No. It needs a Python server (our hard requirement is no server), is unfinished, and targets a 2-year-old internal API. The useful idea is that Python drives the browser's WebGPU through a narrow command protocol. tinygrad-web's handle-based JS bridge follows the same principle, but in-process. |
+| 6. Reusable in a maintained library? | No. It needs a Python server (our hard requirement is no server), is unfinished, and targets a 2-year-old internal API. The useful idea is that Python drives the browser's WebGPU through a narrow command protocol. tinygrad.js's handle-based JS bridge follows the same principle, but in-process. |
 
 ### Other prior art found
 
@@ -73,10 +73,10 @@ Reused unchanged from upstream:
 | Kernel ABI: binding 0 = `INFINITY` uniform, storage buffers for tensors, uniforms for symbolic variables, `@workgroup_size` baked into the shader | yes, the JS bridge implements it |
 | `LRUAllocator` (buffer reuse) | yes |
 | WEBGPU-specific scheduler rules (`DEVICE_MAX_BUFS["WEBGPU"] = 8`, no buffer views, dtype table) | yes, because the browser device keeps the name `WEBGPU` |
-| `ops_webgpu.py` (Dawn/ctypes) | **no**, replaced by `python/tinygrad_web/webgpu.py` + `src/bridge.ts` |
+| `ops_webgpu.py` (Dawn/ctypes) | **no**, replaced by `python/tinygrad_js/webgpu.py` + `src/bridge.ts` |
 | `ops_cpu.py` (clang/LLVM/x86 asm) | **no**. In wasm, `CPU` is tinygrad's own pure-Python device (`ops_python.PythonDevice`). |
 
-tinygrad finds devices with `importlib.import_module(f"tinygrad.runtime.ops_{name}")`. tinygrad-web puts its modules
+tinygrad finds devices with `importlib.import_module(f"tinygrad.runtime.ops_{name}")`. tinygrad.js puts its modules
 into `sys.modules` under those names, so **no tinygrad file is modified**.
 
 ## 3. wgpudawn
@@ -90,7 +90,7 @@ Dawn's *Emdawnwebgpu* and needs **JSPI**.
 `wgpu.gpu.request_adapter_sync()`, `request_device_sync()`, buffer creation, a WGSL compute pipeline, dispatch and
 `queue.read_buffer()` all worked. A vector add returned `[5. 7. 9.]`. Import took 0.12 s.
 
-It's a viable bridge, but tinygrad-web doesn't use it as its primary path:
+It's a viable bridge, but tinygrad.js doesn't use it as its primary path:
 
 * It doesn't expose the `webgpu.h` ctypes ABI that upstream's `ops_webgpu.py` expects. We would still have to write a
   tinygrad device against the wgpu-py API, about the same amount of code as against the JS API.
@@ -99,7 +99,7 @@ It's a viable bridge, but tinygrad-web doesn't use it as its primary path:
 * It needs JSPI too, so it doesn't widen browser support.
 
 Reconsider it if a later tinygrad release makes its WEBGPU backend target the wgpu-py API, or if wgpudawn starts
-exposing the C ABI to ctypes. Then upstream's backend could run in Pyodide with no tinygrad-web device code at all.
+exposing the C ABI to ctypes. Then upstream's backend could run in Pyodide with no tinygrad.js device code at all.
 
 ## 4. Bridging synchronous Python and asynchronous WebGPU
 
@@ -139,7 +139,7 @@ Findings while porting (all handled without editing tinygrad's files):
 1. tinygrad ≥ 0.13 compiles kernels in a `multiprocessing` pool (`PARALLEL`), and Pyodide has no `_multiprocessing`. Fixed with
    tinygrad's own knob: `PARALLEL=0`.
 2. tinygrad ≥ 0.13 realizes device-less tensors (e.g. `Tensor.arange(...)` combined only with Python scalars) on a hard-coded
-   `"CPU"` device. That device needs clang/LLVM, and its x86 assembler backend rejects `wasm32`. tinygrad-web provides `CPU` as
+   `"CPU"` device. That device needs clang/LLVM, and its x86 assembler backend rejects `wasm32`. tinygrad.js provides `CPU` as
    tinygrad's Python interpreter device, and adds one documented runtime patch so device-less tensors are realized on
    `Device.DEFAULT`. See [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md).
 3. tinygrad's RNG (`Tensor.randn`) goes through Box–Muller (`log`, `cos`). WGSL leaves the precision of transcendental

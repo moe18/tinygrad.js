@@ -52,9 +52,9 @@ for n in (8, 32):
     st = time.perf_counter(); (a @ b).numpy(); dt = time.perf_counter() - st
     print(f"{n:3d}x{n:<3d} {dev:7s} {dt*1000:8.2f} ms")
 `,
-  "GPU stats": `import tinygrad_web
+  "GPU stats": `import tinygrad_js
 from tinygrad import Tensor
 (Tensor.rand(256, 256) @ Tensor.rand(256, 256)).sum().item()
-for k, v in tinygrad_web.stats().items(): print(f"{k:22s} {v}")
+for k, v in tinygrad_js.stats().items(): print(f"{k:22s} {v}")
 `,
 };

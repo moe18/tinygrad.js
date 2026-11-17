@@ -15,13 +15,13 @@ const prelude = fs.readFileSync(path.join(root, "tests/programs/_prelude.py"), "
 
 /** Counts tinygrad kernels compiled for the PYTHON (CPU) device: GPU tests assert it stays 0. */
 const INSTRUMENT = `
-import tinygrad.runtime.ops_python as _tgw_op
-_tgw_python_programs = [0]
-_tgw_orig_init = _tgw_op.PythonProgram.__init__
-def _tgw_counting_init(self, *a, **k):
-  _tgw_python_programs[0] += 1
-  return _tgw_orig_init(self, *a, **k)
-_tgw_op.PythonProgram.__init__ = _tgw_counting_init
+import tinygrad.runtime.ops_python as _tgjs_op
+_tgjs_python_programs = [0]
+_tgjs_orig_init = _tgjs_op.PythonProgram.__init__
+def _tgjs_counting_init(self, *a, **k):
+  _tgjs_python_programs[0] += 1
+  return _tgjs_orig_init(self, *a, **k)
+_tgjs_op.PythonProgram.__init__ = _tgjs_counting_init
 `;
 
 export interface Session {
@@ -56,7 +56,7 @@ export async function openSession(browser: Browser, opts: CreateTinygradOptions 
       if (!r.ok) throw new Error(`${name} failed: ${r.error?.traceback || r.error?.message}\n${r.stdout}\n${r.stderr}`);
       const line = r.stdout.split("\n").find((l) => l.startsWith("RESULT_JSON:"));
       if (!line) throw new Error(`${name}: no RESULT_JSON in output:\n${r.stdout}`);
-      const counter = await run("_tgw_python_programs[0]");
+      const counter = await run("_tgjs_python_programs[0]");
       return { result: JSON.parse(line.slice("RESULT_JSON:".length)), run: r, pythonDeviceKernels: Number(counter.result) };
     },
     async close() {

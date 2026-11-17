@@ -112,7 +112,7 @@ test("network: 'allow' keeps fetch available", async ({ browser }) => {
   try {
     const r = await s.run("import pyodide.http, json\nr = await pyodide.http.pyfetch('/package.json')\njson.loads(await r.string())['name']");
     expect(r.ok, JSON.stringify(r.error)).toBe(true);
-    expect(r.result).toBe("'tinygrad-web'");
+    expect(r.result).toBe("'tinygrad.js'");
   } finally { await s.close(); }
 });
 

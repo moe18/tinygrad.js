@@ -1,5 +1,5 @@
 {
-  "name": "tinygrad-web-vite-demo",
+  "name": "tinygrad-js-vite-demo",
   "private": true,
   "type": "module",
   "scripts": {
@@ -9,7 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "tinygrad-web": "file:../.."
+    "tinygrad.js": "file:../.."
   },
   "devDependencies": {
     "typescript": "5.9.3",

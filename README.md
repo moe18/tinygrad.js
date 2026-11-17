@@ -1,11 +1,11 @@
-# tinygrad-web
+# tinygrad.js
 
 Run the **real, upstream [tinygrad](https://github.com/tinygrad/tinygrad)** in the browser. Python runs in
 **[Pyodide](https://pyodide.org)** inside a Web Worker, and tinygrad's kernels run as **WGSL compute shaders on the
 browser's WebGPU** device. No Python server, CUDA or native install.
 
 ```ts
-import { createTinygrad } from "tinygrad-web";
+import { createTinygrad } from "tinygrad.js";
 
 const runtime = await createTinygrad({ device: "webgpu" });
 const result = await runtime.run(`
@@ -19,18 +19,18 @@ console.log(result.stdout);
 await runtime.destroy();
 ```
 
-This isn't a reimplementation. tinygrad-web installs the unmodified tinygrad wheel from PyPI and adds a browser
+This isn't a reimplementation. tinygrad.js installs the unmodified tinygrad wheel from PyPI and adds a browser
 `WEBGPU` device to it. `Tensor`, autograd, `nn`, the optimizers, `TinyJit`, the scheduler and the WGSL code generator
 are all upstream code.
 
 ```
-browser app ──► tinygrad-web (TypeScript API) ──► Web Worker
+browser app ──► tinygrad.js (TypeScript API) ──► Web Worker
                                                      │
                                          Pyodide (CPython 3.14 → wasm)
                                                      │
                                   upstream tinygrad (PyPI wheel, unmodified)
                                                      │  WGSLRenderer → WGSL kernels
-                                tinygrad_web.webgpu (WEBGPU device, Python)
+                                tinygrad_js.webgpu (WEBGPU device, Python)
                                                      │  pyodide FFI, integer handles, JSPI for awaits
                                       src/bridge.ts (JS WebGPU bridge)
                                                      │
@@ -50,7 +50,7 @@ What is verified, and where (see [Testing](#testing)):
 ## Install
 
 ```sh
-npm install tinygrad-web
+npm install tinygrad.js
 ```
 
 The package contains the TypeScript API (`dist/index.js`), the worker (`dist/worker.js`) and the pinned tinygrad wheels
@@ -65,7 +65,7 @@ Rollup and esbuild handle. With **Vite**, exclude it from dependency pre-bundlin
 ```ts
 // vite.config.ts
 export default defineConfig({
-  optimizeDeps: { exclude: ["tinygrad-web"] },
+  optimizeDeps: { exclude: ["tinygrad.js"] },
   server: { headers: { "Cross-Origin-Opener-Policy": "same-origin", "Cross-Origin-Embedder-Policy": "require-corp" } },
 });
 ```
@@ -117,9 +117,9 @@ Python state persists between `run()` calls: variables, imports and compiled ker
 
 ```python
 from tinygrad import Tensor, Device   # Device.DEFAULT == "WEBGPU"
-import tinygrad_web
-tinygrad_web.stats()          # kernels compiled/dispatched, bytes moved, live GPU memory, bind-group cache hits
-tinygrad_web.device_info()    # adapter info and limits
+import tinygrad_js
+tinygrad_js.stats()          # kernels compiled/dispatched, bytes moved, live GPU memory, bind-group cache hits
+tinygrad_js.device_info()    # adapter info and limits
 ```
 
 `Device["CPU"]` exists too. In the browser it is tinygrad's pure-Python interpreter device, which is correct but very
@@ -138,7 +138,7 @@ slow (see [Benchmarks](#benchmarks)).
 
 ## Browser support
 
-tinygrad-web needs **WebGPU in a dedicated worker** and **JSPI**. JSPI lets Python block on WebGPU's asynchronous readback
+tinygrad.js needs **WebGPU in a dedicated worker** and **JSPI**. JSPI lets Python block on WebGPU's asynchronous readback
 via Pyodide's `run_sync`. Without JSPI, tinygrad's synchronous API (`.numpy()`, `.item()`) can't wait for the GPU.
 
 * Verified: Chromium 153 on Linux (headless, SwiftShader). Chrome/Edge have shipped JSPI by default since version 137.
@@ -159,7 +159,7 @@ via Pyodide's `run_sync`. Without JSPI, tinygrad's synchronous API (`.numpy()`, 
 
 ## Safety and isolation
 
-tinygrad-web is designed to run user-submitted code inside a larger app, but **a Web Worker is not a security boundary
+tinygrad.js is designed to run user-submitted code inside a larger app, but **a Web Worker is not a security boundary
 equivalent to a server-side sandbox.** Code in the worker runs with your page's origin.
 
 * Python runs in a dedicated worker. It can't touch the DOM, `localStorage`, cookies or your page's JS objects, and only
@@ -261,7 +261,7 @@ and non-Chromium browsers.
 
 ```
 src/            TypeScript: index.ts (API), runtime.ts (main thread), worker.ts, bridge.ts (WebGPU), protocol.ts, types.ts
-python/tinygrad_web/   webgpu.py (WEBGPU device), cpu.py, patches.py, _runner.py, __init__.py (install)
+python/tinygrad_js/   webgpu.py (WEBGPU device), cpu.py, patches.py, _runner.py, __init__.py (install)
 tests/          Playwright tests, shared Python programs, native CPU reference fixtures
 benchmarks/     bench.py (browser + native), run.mjs, results/
 examples/       vite-demo/, python/mlp_training.py
@@ -274,5 +274,5 @@ The build is reproducible. Every third-party artifact (tinygrad wheels, Pyodide 
 
 ## License
 
-MIT for tinygrad-web's own code ([LICENSE](LICENSE)). The package redistributes unmodified tinygrad wheels (MIT). Pyodide (MPL-2.0)
+MIT for tinygrad.js's own code ([LICENSE](LICENSE)). The package redistributes unmodified tinygrad wheels (MIT). Pyodide (MPL-2.0)
 and NumPy (BSD-3-Clause) load at runtime. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

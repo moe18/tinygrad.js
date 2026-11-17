@@ -22,7 +22,7 @@ test("README example runs verbatim", async () => {
 
 test("tensor data lives in a WebGPU buffer (read back directly through WebGPU, bypassing tinygrad)", async () => {
   const r = await s.run(`
-import numpy as np, _tinygrad_web_bridge as bridge
+import numpy as np, _tinygrad_js_bridge as bridge
 from pyodide.ffi import run_sync
 from tinygrad import Tensor
 t = (Tensor([1.0, 2.0, 3.0, 4.0]) * 3 + 1).realize()
@@ -47,14 +47,14 @@ test("kernels are compiled once and cached across runs", async () => {
 
 test("allocation and deallocation of GPU buffers", async () => {
   const r = await s.run(`
-import gc, tinygrad_web
+import gc, tinygrad_js
 from tinygrad import Tensor, Device
-before = tinygrad_web.stats()["bytesAllocated"]
+before = tinygrad_js.stats()["bytesAllocated"]
 t = Tensor.ones(1024, 1024).contiguous().realize()
-during = tinygrad_web.stats()["bytesAllocated"]
+during = tinygrad_js.stats()["bytesAllocated"]
 del t; gc.collect()
 Device["WEBGPU"].allocator.free_cache()   # LRUAllocator keeps freed buffers for reuse until asked to release them
-after = tinygrad_web.stats()["bytesAllocated"]
+after = tinygrad_js.stats()["bytesAllocated"]
 print(during - before >= 4 * 1024 * 1024, after <= before)`);
   expect(r.ok, r.error?.traceback).toBe(true);
   expect(r.stdout.trim()).toBe("True True");
@@ -75,7 +75,7 @@ test("Python exceptions in user code are reported with type and traceback", asyn
 });
 
 test("device loss is reported, and restart() recovers", async () => {
-  const lost = await s.run("import _tinygrad_web_bridge as b\nb.device.destroy()\nfrom tinygrad import Tensor\n(Tensor([1.0]) + 1).numpy()");
+  const lost = await s.run("import _tinygrad_js_bridge as b\nb.device.destroy()\nfrom tinygrad import Tensor\n(Tensor([1.0]) + 1).numpy()");
   expect(lost.ok).toBe(false);
   expect(lost.error!.message).toMatch(/device lost|destroyed/i);
   const info = await s.page.evaluate(() => (window as any).rt.restart());

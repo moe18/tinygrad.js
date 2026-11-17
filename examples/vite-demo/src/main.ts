@@ -1,4 +1,4 @@
-import { createTinygrad, checkSupport, type TinygradRuntime, type RuntimeInfo, type RunResult } from "tinygrad-web";
+import { createTinygrad, checkSupport, type TinygradRuntime, type RuntimeInfo, type RunResult } from "tinygrad.js";
 import { EXAMPLES } from "./examples";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;

@@ -1,9 +1,9 @@
-"""tinygrad-web: run upstream tinygrad in the browser (Pyodide) on the browser's WebGPU.
+"""tinygrad.js: run upstream tinygrad in the browser (Pyodide) on the browser's WebGPU.
 
 Usage inside Pyodide (the TypeScript runtime does this for you)::
 
-    import tinygrad_web
-    tinygrad_web.install(bridge, default_device="WEBGPU")   # preferably before `import tinygrad`
+    import tinygrad_js
+    tinygrad_js.install(bridge, default_device="WEBGPU")   # preferably before `import tinygrad`
     from tinygrad import Tensor
 """
 from __future__ import annotations

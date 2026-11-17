@@ -63,12 +63,12 @@ export class TinygradRuntime {
 
   private start(): Promise<RuntimeInfo> {
     this.info = null;
-    const worker = new Worker(this.workerURL, { type: "module", name: "tinygrad-web" });
+    const worker = new Worker(this.workerURL, { type: "module", name: "tinygrad.js" });
     this.worker = worker;
     worker.onmessage = (ev: MessageEvent<FromWorker>) => this.onMessage(ev.data);
     worker.onerror = (ev) => {
       ev.preventDefault?.();
-      this.failAll(new TinygradError(`tinygrad-web worker error: ${ev.message || "failed to load worker script"}`));
+      this.failAll(new TinygradError(`tinygrad.js worker error: ${ev.message || "failed to load worker script"}`));
     };
     if (typeof SharedArrayBuffer !== "undefined" && globalThis.crossOriginIsolated) {
       this.interruptBuffer = new Int32Array(new SharedArrayBuffer(4));
@@ -78,7 +78,7 @@ export class TinygradRuntime {
     const p = this.request({ type: "init", id: 0, config }) as Promise<RuntimeInfo>;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const timeout = new Promise<never>((_, rej) => {
-      timer = setTimeout(() => rej(new TinygradError(`tinygrad-web initialization timed out after ${initTimeout} ms`)), initTimeout);
+      timer = setTimeout(() => rej(new TinygradError(`tinygrad.js initialization timed out after ${initTimeout} ms`)), initTimeout);
     });
     return Promise.race([p, timeout]).then(
       (info) => { clearTimeout(timer); this.info = info; return info; },
@@ -101,7 +101,7 @@ export class TinygradRuntime {
   }
 
   private request(msg: ToWorker, extra: Partial<Pending> = {}): Promise<unknown> {
-    if (!this.worker) return Promise.reject(new TinygradError("tinygrad-web runtime has no worker (destroyed?)"));
+    if (!this.worker) return Promise.reject(new TinygradError("tinygrad.js runtime has no worker (destroyed?)"));
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve, reject, kind: msg.type, stdout: [], stderr: [], ...extra });
@@ -125,7 +125,7 @@ export class TinygradRuntime {
    * check `result.ok` / `result.error`. Rejects only if the runtime was destroyed or failed to (re)start.
    */
   async run(code: string, options: RunOptions = {}): Promise<RunResult> {
-    if (this.destroyed) throw new TinygradError("tinygrad-web runtime was destroyed");
+    if (this.destroyed) throw new TinygradError("tinygrad.js runtime was destroyed");
     await this.ready;
     const holder: Partial<Pending> = { onStdout: options.onStdout, onStderr: options.onStderr };
     const id = this.nextId; // the id request() will assign
@@ -194,9 +194,9 @@ export class TinygradRuntime {
 
   /** Kill the worker and start a fresh Python environment with the same options. */
   async restart(): Promise<RuntimeInfo> {
-    if (this.destroyed) throw new TinygradError("tinygrad-web runtime was destroyed");
+    if (this.destroyed) throw new TinygradError("tinygrad.js runtime was destroyed");
     this.terminateWorker();
-    this.failAll(new TinygradError("tinygrad-web worker was terminated"));
+    this.failAll(new TinygradError("tinygrad.js worker was terminated"));
     this.ready = this.start();
     return this.ready;
   }
@@ -209,7 +209,7 @@ export class TinygradRuntime {
 
   /** Information about the device, versions, init timings and diagnostics. */
   getDeviceInfo(): RuntimeInfo {
-    if (!this.info) throw new TinygradError("tinygrad-web runtime is not ready");
+    if (!this.info) throw new TinygradError("tinygrad.js runtime is not ready");
     return this.info;
   }
 
@@ -221,6 +221,6 @@ export class TinygradRuntime {
       await Promise.race([this.request({ type: "dispose", id: 0 }).catch(() => {}), new Promise((r) => setTimeout(r, 1000))]);
     }
     this.terminateWorker();
-    this.failAll(new TinygradError("tinygrad-web runtime was destroyed"));
+    this.failAll(new TinygradError("tinygrad.js runtime was destroyed"));
   }
 }

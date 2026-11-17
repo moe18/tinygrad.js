@@ -4,7 +4,7 @@
 //   npm run build && npm run bench -- [--quick] [--label NAME] [--native /path/to/python] [--headed]
 //
 // Measures (median of runs) Pyodide/package/WebGPU/import init time in fresh workers, then runs benchmarks/bench.py in
-// the browser on WEBGPU and on tinygrad-web's interpreted CPU device. With --native, also runs bench.py with native
+// the browser on WEBGPU and on tinygrad.js's interpreted CPU device. With --native, also runs bench.py with native
 // upstream tinygrad (DEV=CPU, clang) as a reference. Results: benchmarks/results/<label>.{json,md}.
 // Extra Chromium flags: TGW_CHROMIUM_ARGS="--use-angle=vulkan ..." (e.g. to select a hardware adapter).
 import fs from "node:fs";

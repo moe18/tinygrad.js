@@ -12,7 +12,7 @@ test("spec example: automatic differentiation (verbatim, requires_grad=True)", a
     expect(r.ok, JSON.stringify(r.error)).toBe(true);
     expect(r.stdout.trim()).toBe("[4.]");
   } else {
-    // tinygrad 0.13+ removed the requires_grad argument upstream; this is upstream behaviour, not a tinygrad-web bug.
+    // tinygrad 0.13+ removed the requires_grad argument upstream; this is upstream behaviour, not a tinygrad.js bug.
     expect(r.ok).toBe(false);
     expect(r.error!.type).toBe("TypeError");
     expect(r.error!.message).toContain("requires_grad");

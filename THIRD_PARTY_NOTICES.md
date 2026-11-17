@@ -1,6 +1,6 @@
 # Third-party notices
 
-tinygrad-web's own code is MIT licensed (see LICENSE). The npm package redistributes the following third-party software.
+tinygrad.js's own code is MIT licensed (see LICENSE). The npm package redistributes the following third-party software.
 
 ## tinygrad (redistributed: `dist/assets/tinygrad-*.whl`, unmodified wheels from PyPI)
 

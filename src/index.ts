@@ -1,8 +1,8 @@
 /**
- * tinygrad-web: run upstream tinygrad (Python) in the browser with Pyodide, executing kernels on the browser's WebGPU.
+ * tinygrad.js: run upstream tinygrad (Python) in the browser with Pyodide, executing kernels on the browser's WebGPU.
  *
  * ```ts
- * import { createTinygrad } from "tinygrad-web";
+ * import { createTinygrad } from "tinygrad.js";
  * const runtime = await createTinygrad({ device: "webgpu" });
  * const result = await runtime.run("from tinygrad import Tensor\nprint((Tensor([1,2,3]) + 1).numpy())");
  * console.log(result.stdout);

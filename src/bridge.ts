@@ -1,8 +1,8 @@
 /// <reference types="@webgpu/types" />
 /**
- * WebGPU bridge: the JavaScript half of tinygrad-web's WEBGPU device.
+ * WebGPU bridge: the JavaScript half of tinygrad.js's WEBGPU device.
  *
- * The Python device (python/tinygrad_web/webgpu.py) calls these methods through Pyodide's FFI. GPU objects stay
+ * The Python device (python/tinygrad_js/webgpu.py) calls these methods through Pyodide's FFI. GPU objects stay
  * on the JS side and Python refers to them by integer handles, so no JS objects need to be kept alive from Python.
  *
  * Synchronous methods are used on the hot path (createBuffer, writeBuffer, dispatch). Methods returning a Promise
@@ -127,7 +127,7 @@ export class WebGPUBridge {
   createBuffer(size: number): number {
     this.check();
     if (this.counters.bytesAllocated + size > this.maxBufferMemory)
-      throw new Error(`tinygrad-web GPU memory limit exceeded: ${this.counters.bytesAllocated + size} > ${this.maxBufferMemory} bytes`);
+      throw new Error(`tinygrad.js GPU memory limit exceeded: ${this.counters.bytesAllocated + size} > ${this.maxBufferMemory} bytes`);
     if (size > this.device.limits.maxBufferSize)
       throw new Error(`buffer of ${size} bytes exceeds this device's maxBufferSize (${this.device.limits.maxBufferSize})`);
     const buf = this.device.createBuffer({ size, usage: STORAGE | COPY_SRC | COPY_DST });

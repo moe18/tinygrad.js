@@ -1,6 +1,6 @@
 """Browser WebGPU device for upstream tinygrad, running inside Pyodide.
 
-This module replaces ``tinygrad.runtime.ops_webgpu`` at runtime (see ``tinygrad_web.install``). Upstream's
+This module replaces ``tinygrad.runtime.ops_webgpu`` at runtime (see ``tinygrad_js.install``). Upstream's
 native module drives Dawn through ctypes, which cannot work in WebAssembly; this one reuses everything else
 from tinygrad (scheduler, codegen, ``WGSLRenderer``, ``LRUAllocator``) and sends the final WGSL kernels and
 buffer operations to the browser's ``navigator.gpu`` through a small JavaScript bridge (``src/bridge.ts``).
@@ -18,14 +18,14 @@ from tinygrad.device import Compiled, LRUAllocator, BufferSpec
 from tinygrad.renderer.wgsl import WGSLRenderer
 from tinygrad.helpers import round_up
 
-_bridge = None  # the JS bridge object, set by tinygrad_web.install()
+_bridge = None  # the JS bridge object, set by tinygrad_js.install()
 
 def set_bridge(bridge) -> None:
   global _bridge
   _bridge = bridge
 
 def get_bridge():
-  if _bridge is None: raise RuntimeError("tinygrad_web: no WebGPU bridge installed; call tinygrad_web.install(bridge) first")
+  if _bridge is None: raise RuntimeError("tinygrad_js: no WebGPU bridge installed; call tinygrad_js.install(bridge) first")
   return _bridge
 
 def _await(promise):
@@ -36,7 +36,7 @@ def _await(promise):
     # surface the JS error message as a normal Python RuntimeError
     msg = str(e)
     if "can_run_sync" in msg or "stack switching" in msg.lower() or "JSPI" in msg:
-      raise RuntimeError("tinygrad_web: blocking on WebGPU requires JSPI (WebAssembly JavaScript Promise Integration) and code "
+      raise RuntimeError("tinygrad_js: blocking on WebGPU requires JSPI (WebAssembly JavaScript Promise Integration) and code "
                          f"executed through runPythonAsync. Original error: {msg}") from None
     raise RuntimeError(f"WebGPU: {msg}") from None
 

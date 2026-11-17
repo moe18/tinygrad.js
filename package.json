@@ -1,5 +1,5 @@
 {
-  "name": "tinygrad-web",
+  "name": "tinygrad.js",
   "version": "0.1.0",
   "description": "Run upstream tinygrad in the browser with Pyodide on the browser's WebGPU",
   "license": "MIT",
