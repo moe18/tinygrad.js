@@ -1,0 +1,55 @@
+# Build the library and publish examples/playground to GitHub Pages:
+#   https://moe18.github.io/tinygrad.js/  (redirects to examples/playground/)
+# The site keeps the repository layout (dist/, vendor/pyodide/, examples/playground/) so the page's relative paths
+# are the same as under `npm run serve`. Pages can't send COOP/COEP headers, so Stop there restarts the worker.
+name: Deploy playground to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run fetch:assets -- --pyodide
+      - run: npm run build
+      - name: Assemble site
+        run: |
+          mkdir -p _site/examples _site/vendor
+          cp -r dist _site/dist
+          cp -r vendor/pyodide _site/vendor/pyodide
+          cp -r examples/playground _site/examples/playground
+          printf '<!doctype html>\n<meta charset="utf-8">\n<title>tinygrad.js</title>\n<meta http-equiv="refresh" content="0; url=examples/playground/">\n<a href="examples/playground/">tinygrad.js playground</a>\n' > _site/index.html
+          touch _site/.nojekyll
+          du -sh _site
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
