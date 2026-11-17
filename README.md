@@ -4,6 +4,9 @@ Run the **real, upstream [tinygrad](https://github.com/tinygrad/tinygrad)** in t
 **[Pyodide](https://pyodide.org)** inside a Web Worker, and tinygrad's kernels run as **WGSL compute shaders on the
 browser's WebGPU** device. No Python server, CUDA or native install.
 
+**[Try the playground](https://moe18.github.io/tinygrad.js/)** (Chrome or Edge 137+): paint a dataset and watch tinygrad train an
+MLP on your GPU.
+
 ```ts
 import { createTinygrad } from "tinygrad.js";
 
@@ -168,6 +171,15 @@ slow (see [Benchmarks](#benchmarks)).
   npm install && npm run fetch:assets -- --pyodide && npm run build
   cd examples/vite-demo && npm install && npm run dev     # http://localhost:5173
   ```
+* [`examples/playground`](examples/playground) ([**try it live**](https://moe18.github.io/tinygrad.js/), deployed to GitHub
+  Pages by `.github/workflows/pages.yml`): a single HTML page, no build step. Paint a 2-D dataset (or pick circle,
+  XOR, moons, spiral) and watch an MLP's decision boundary update live as tinygrad trains it on WebGPU. You can change the
+  depth, width, activation and learning rate, print the WGSL kernels of a forward pass, and run Python against the same
+  session (`model`, `X`, `Y`, `opt` are live).
+  ```sh
+  npm install && npm run fetch:assets -- --pyodide && npm run build
+  COI=1 npm run serve      # http://127.0.0.1:8080/examples/playground/
+  ```
 * [`examples/python/mlp_training.py`](examples/python/mlp_training.py): trains an MLP with `nn.Linear`, `Adam` and `TinyJit`
   on a synthetic dataset. It runs both in the browser and natively.
 
@@ -289,6 +301,7 @@ implementation-defined. Training losses get rtol 1e-3 over 60 steps.
 | repeated runs, stdout/stderr, interrupt (signal and terminate, incl. during GPU waits), timeouts, network policy, reset, destroy | `init.test.ts` |
 | unsupported environment (no adapter): clear error, `auto` → CPU fallback, `cpu` mode | `init.test.ts` |
 | Vite demo production build: every example plus Stop | `demo.test.ts` (needs `examples/vite-demo` built) |
+| playground: trains all four datasets, painting mid-training, shared Python session, WGSL, Stop | `playground.test.ts` |
 
 Not verified by automated tests: browsers without JSPI (Chromium can't disable JSPI, so that error path is untested), hardware GPUs,
 and non-Chromium browsers.
@@ -300,7 +313,7 @@ src/            TypeScript: index.ts (API), runtime.ts (main thread), worker.ts,
 python/tinygrad_js/   webgpu.py (WEBGPU device), cpu.py, patches.py, training.py (run_training), _runner.py, __init__.py (install)
 tests/          Playwright tests, shared Python programs, native CPU reference fixtures
 benchmarks/     bench.py (browser + native), run.mjs, results/
-examples/       vite-demo/, python/mlp_training.py
+examples/       vite-demo/, playground/, python/mlp_training.py
 scripts/        build.mjs, fetch-assets.mjs (sha256-pinned downloads), pins.mjs, serve.mjs
 docs/COMPATIBILITY.md, RESEARCH.md
 ```
