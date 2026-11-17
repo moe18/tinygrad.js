@@ -10,3 +10,6 @@ examples/vite-demo/dist/
 examples/vite-demo/node_modules/
 examples/vite-demo/public/pyodide/
 *.log
+build/
+*.egg-info/
+__pycache__/

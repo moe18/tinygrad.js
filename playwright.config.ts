@@ -21,7 +21,7 @@ export default defineConfig<TestOptions>({
   },
   projects: [
     { name: "tinygrad-0.14.0", use: { tinygradVersion: "0.14.0" } },
-    { name: "tinygrad-0.12.0", use: { tinygradVersion: "0.12.0" }, testIgnore: /init\.test\.ts|benchmark/ },
+    { name: "tinygrad-0.12.0", use: { tinygradVersion: "0.12.0" }, testIgnore: /init\.test\.ts|demo\.test\.ts/ },
   ],
   webServer: [
     { command: "node scripts/serve.mjs", env: { PORT: "8780", COI: "1" }, url: "http://127.0.0.1:8780/package.json", reuseExistingServer: true },

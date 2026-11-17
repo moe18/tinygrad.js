@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>tinygrad-web demo</title>
+  <link rel="stylesheet" href="/src/style.css" />
+</head>
+<body>
+  <header>
+    <h1>tinygrad-web</h1>
+    <span>upstream tinygrad · Pyodide · browser WebGPU, no Python server</span>
+  </header>
+  <main>
+    <section class="editor-pane">
+      <div class="toolbar">
+        <label>Example <select id="examples"></select></label>
+        <button id="run" disabled>Run <kbd>Ctrl+Enter</kbd></button>
+        <button id="stop" disabled>Stop</button>
+        <span id="state" class="state">starting…</span>
+      </div>
+      <textarea id="code" spellcheck="false" autocomplete="off" aria-label="Python code"></textarea>
+    </section>
+    <section class="side-pane">
+      <h2>Output <button id="clear" class="small">clear</button></h2>
+      <pre id="console" aria-live="polite"></pre>
+      <h2>Run</h2>
+      <dl id="run-info"><dt>status</dt><dd>–</dd></dl>
+      <h2>Device</h2>
+      <dl id="device-info"><dt>status</dt><dd>initializing…</dd></dl>
+    </section>
+  </main>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>

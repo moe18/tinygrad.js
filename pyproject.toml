@@ -1,0 +1,19 @@
+# The Python half of tinygrad-web. It is normally embedded into the worker bundle by `npm run build`; this file lets it be
+# built as a wheel too (`pip wheel . -w dist/`), e.g. to load it with micropip in a custom Pyodide setup.
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tinygrad-web"
+version = "0.1.0"
+description = "Browser WebGPU device for upstream tinygrad, running in Pyodide"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.12"
+dependencies = ["tinygrad>=0.12.0,<0.15"]
+
+[tool.setuptools]
+package-dir = { "" = "python" }
+packages = ["tinygrad_web"]
