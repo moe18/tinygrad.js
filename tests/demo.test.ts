@@ -25,6 +25,7 @@ test.describe("Vite demo (examples/vite-demo, production build)", () => {
     expect(text).toContain("dy/dx at x=2: [4.]");
     expect(text).toMatch(/final loss [\d.]+ \(initial [\d.]+\), accuracy/);
     expect(text).toContain("@compute"); // generated WGSL was printed
+    expect(text).toMatch(/200 steps in [\d.]+s, TinyJit, loss [\d.]+ -> [\d.]+/); // run_training example
     await page.screenshot({ path: "test-results/demo.png", fullPage: true });
 
     await page.locator("#code").fill("while True:\n  pass");

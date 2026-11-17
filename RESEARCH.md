@@ -146,3 +146,13 @@ Findings while porting (all handled without editing tinygrad's files):
    functions implementation-defined, so `randn` output on WebGPU differs from CPU by up to ~7e-4 (measured). Matmuls of exact
    inputs (1×1 up to 130×130) matched native CPU bit for bit (max abs error 0). The other exact-input ops in the tests stay
    within rtol 1e-4 / atol 1e-5.
+4. `TinyJit` replays recorded kernels without rerunning Python. Measured natively and in the browser on both versions: Python-number
+   arguments are frozen at their recorded value (calling with `s=3` returns the `s=2` result), and when an input's shape changes,
+   tinygrad 0.12 raises `JitError` but **0.14 silently returns a wrong-shaped result**. `.item()` inside a jitted function raises
+   `JitError` while recording on 0.14; 0.12 allows it, and its replay was numerically identical. `tinygrad_js.run_training` guards
+   against the silent cases (see README).
+5. Pyodide interrupts vs `run_sync`: if `runtime.interrupt()` sets Pyodide's interrupt buffer while Python is suspended in `run_sync`,
+   the `KeyboardInterrupt` can be raised inside the JS→Python callback that resolves the awaited future. It is swallowed there, the
+   future never resolves, and the run hangs. Measured: 2 of 20 interrupts during a readback-heavy loop succeeded before the fix,
+   and 20 of 20 after. The fix: the bridge takes a pending interrupt out of the buffer just before its promises settle, and
+   Python re-raises it in user code. This could be worth reporting to Pyodide.

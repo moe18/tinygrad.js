@@ -43,7 +43,7 @@ What is verified, and where (see [Testing](#testing)):
 
 | | |
 |---|---|
-| ✅ verified | Chromium 153 (headless), WebGPU through Dawn's **SwiftShader** adapter: the real WebGPU API and real WGSL compute shaders, executed on the CPU because the test machine has no GPU. 55 Playwright tests pass: 35 on tinygrad 0.14.0 (including the demo) and 20 on tinygrad 0.12.0 (1 skipped because it doesn't apply to 0.12). Results are compared against native upstream tinygrad on CPU. |
+| ✅ verified | Chromium 153 (headless), WebGPU through Dawn's **SwiftShader** adapter: the real WebGPU API and real WGSL compute shaders, executed on the CPU because the test machine has no GPU. 60 Playwright tests pass: 38 on tinygrad 0.14.0 (including the demo) and 22 on tinygrad 0.12.0 (1 skipped because it doesn't apply to 0.12). Results are compared against native upstream tinygrad on CPU. |
 | ⚠️ not verified | Hardware GPUs, Firefox, Safari, mobile browsers. The code uses only standard WebGPU + JSPI and should work wherever both exist, but this hasn't been tested. |
 | ❌ not supported | Browsers without JSPI (WebAssembly JavaScript Promise Integration). See [Browser support](#browser-support). |
 
@@ -121,6 +121,41 @@ import tinygrad_js
 tinygrad_js.stats()          # kernels compiled/dispatched, bytes moved, live GPU memory, bind-group cache hits
 tinygrad_js.device_info()    # adapter info and limits
 ```
+
+### Training loops: `run_training`
+
+`tinygrad_js.run_training` runs a plain step function fast without the author having to learn
+[TinyJit](https://docs.tinygrad.org)'s rules. It's meant for exercise harnesses: the learner writes an ordinary step, and the harness
+calls the helper.
+
+```python
+from tinygrad_js import run_training
+
+def train_step(x, y):            # ordinary tinygrad code
+  opt.zero_grad()
+  loss = model(x).sparse_categorical_crossentropy(y)
+  loss.backward()
+  opt.step()
+  return loss
+
+result = run_training(train_step, steps=200, args=(X, Y))   # or args=lambda i: next_minibatch(i)
+result.warmup_losses   # losses of the first `warmup` (default 2) plain steps: grade correctness on these
+result.final_loss, result.jit_used, result.jit_fallback_reason, result.ms_per_step_jit
+print(result.summary())  # "200 steps in 1.10s, TinyJit, loss 0.6931 -> 0.0412, 38.0 ms/step plain, 4.9 ms/step jit"
+```
+
+* The first `warmup` steps run plainly, then the rest run under `TinyJit`. Losses are read every `record_every` (10) steps and on the
+  last one. `print_every` logs progress. Training mode (`Tensor.train()` / `Context(TRAINING=1)`) is applied for you on both
+  tinygrad versions.
+* Safety: TinyJit replays recorded kernels without rerunning your Python, and upstream it is silently wrong in two cases we
+  measured. It freezes Python-number arguments, and on tinygrad 0.14 it returns a wrong-shaped result if input shapes change. The
+  helper checks every call's argument shapes, dtypes and Python values against the recorded ones and switches to plain execution
+  on any change. If TinyJit raises (e.g. `.item()` inside the step on tinygrad ≥ 0.13), it also falls back, and reports why in
+  `jit_fallback_reason`.
+* Not detectable: Python logic inside the step that depends on outside state (e.g. a global epoch counter). TinyJit freezes it at
+  its recorded value, so keep such logic out of the step and grade on `warmup_losses`.
+* Tested (both tinygrad versions, on WebGPU): JIT and plain losses agree to 1e-5. In the browser here, steps are ~8× faster with
+  TinyJit. The fallbacks are tested too, and `interrupt()` stops it.
 
 `Device["CPU"]` exists too. In the browser it is tinygrad's pure-Python interpreter device, which is correct but very
 slow (see [Benchmarks](#benchmarks)).
@@ -249,8 +284,9 @@ implementation-defined. Training losses get rtol 1e-3 over 60 steps.
 | GPU buffer transfers (sizes, dtypes, padding, assign) | `tensor.test.ts` |
 | autograd (spec example verbatim on 0.12, adapted on 0.14) | `autograd.test.ts` |
 | NN training (SGD+momentum and Adam; TinyJit example) | `training.test.ts` |
+| `run_training` helper: JIT vs plain agreement, speed, fallbacks, interrupt | `run_training.test.ts` |
 | kernel caching, alloc/free, WGSL compile errors, device loss + restart, memory limit | `webgpu.test.ts` |
-| repeated runs, stdout/stderr, interrupt (signal and terminate), timeouts, network policy, reset, destroy | `init.test.ts` |
+| repeated runs, stdout/stderr, interrupt (signal and terminate, incl. during GPU waits), timeouts, network policy, reset, destroy | `init.test.ts` |
 | unsupported environment (no adapter): clear error, `auto` → CPU fallback, `cpu` mode | `init.test.ts` |
 | Vite demo production build: every example plus Stop | `demo.test.ts` (needs `examples/vite-demo` built) |
 
@@ -261,7 +297,7 @@ and non-Chromium browsers.
 
 ```
 src/            TypeScript: index.ts (API), runtime.ts (main thread), worker.ts, bridge.ts (WebGPU), protocol.ts, types.ts
-python/tinygrad_js/   webgpu.py (WEBGPU device), cpu.py, patches.py, _runner.py, __init__.py (install)
+python/tinygrad_js/   webgpu.py (WEBGPU device), cpu.py, patches.py, training.py (run_training), _runner.py, __init__.py (install)
 tests/          Playwright tests, shared Python programs, native CPU reference fixtures
 benchmarks/     bench.py (browser + native), run.mjs, results/
 examples/       vite-demo/, python/mlp_training.py

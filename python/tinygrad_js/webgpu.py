@@ -31,14 +31,18 @@ def get_bridge():
 def _await(promise):
   """Block on a JS promise. Requires JSPI and being called from code started by runPythonAsync."""
   from pyodide.ffi import run_sync
-  try: return run_sync(promise)
+  try:
+    return run_sync(promise)
   except Exception as e:
-    # surface the JS error message as a normal Python RuntimeError
     msg = str(e)
     if "can_run_sync" in msg or "stack switching" in msg.lower() or "JSPI" in msg:
-      raise RuntimeError("tinygrad_js: blocking on WebGPU requires JSPI (WebAssembly JavaScript Promise Integration) and code "
+      raise RuntimeError("tinygrad.js: blocking on WebGPU requires JSPI (WebAssembly JavaScript Promise Integration) and code "
                          f"executed through runPythonAsync. Original error: {msg}") from None
-    raise RuntimeError(f"WebGPU: {msg}") from None
+    raise RuntimeError(f"WebGPU: {msg}") from None  # surface the JS error message as a normal Python RuntimeError
+  finally:
+    # an interrupt that arrived while we were suspended was parked by the bridge (see WebGPUBridge.guard); raise it here,
+    # in user code, instead of inside Pyodide's promise callback
+    if _bridge is not None and _bridge.takeInterrupt(): raise KeyboardInterrupt
 
 # tinygrad's device API changed between releases; detect which one we are talking to.
 _COMPILED_PARAMS = inspect.signature(Compiled.__init__).parameters

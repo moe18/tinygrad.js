@@ -53,6 +53,8 @@ export class WebGPUBridge {
   private lostReason: string | null = null;
   private maxBatch: number;
   private maxBufferMemory: number;
+  private interruptBuffer: Int32Array | null = null;
+  private interruptPending = false;
   readonly counters: GpuStats = {
     kernelsCompiled: 0, kernelsDispatched: 0, submits: 0, buffersAllocated: 0, buffersLive: 0,
     bytesAllocated: 0, peakBytesAllocated: 0, bytesUploaded: 0, bytesDownloaded: 0, readbacks: 0, syncs: 0,
@@ -122,6 +124,29 @@ export class WebGPUBridge {
     return msg;
   }
 
+  // ------------------------------------------------------------------ interrupts
+
+  /**
+   * Python waits on the promises returned by readBuffer/compile/sync with pyodide.ffi.run_sync. When such a promise
+   * settles, Pyodide resolves a Python future from a JS callback; a KeyboardInterrupt raised inside that callback (because
+   * runtime.interrupt() set Pyodide's interrupt buffer) is swallowed there, the future is never resolved, and the wait
+   * hangs. So, just before settling, take any pending interrupt out of the buffer; the Python side re-raises it in user
+   * code as soon as run_sync returns (see webgpu._await).
+   */
+  setInterruptBuffer(buf: Int32Array | null): void { this.interruptBuffer = buf; }
+  takeInterrupt(): boolean {
+    const pending = this.interruptPending;
+    this.interruptPending = false;
+    return pending;
+  }
+  private stealInterrupt(): void {
+    const buf = this.interruptBuffer;
+    if (buf && Atomics.exchange(buf, 0, 0) !== 0) this.interruptPending = true;
+  }
+  private async guard<T>(p: Promise<T>): Promise<T> {
+    try { return await p; } finally { this.stealInterrupt(); }
+  }
+
   // ------------------------------------------------------------------ buffers
 
   createBuffer(size: number): number {
@@ -180,7 +205,8 @@ export class WebGPUBridge {
   }
 
   /** Copy `nbytes` from a storage buffer to the CPU. Resolves to a Uint8Array of exactly `nbytes`. */
-  async readBuffer(id: number, nbytes: number): Promise<Uint8Array> {
+  readBuffer(id: number, nbytes: number): Promise<Uint8Array> { return this.guard(this.readBufferImpl(id, nbytes)); }
+  private async readBufferImpl(id: number, nbytes: number): Promise<Uint8Array> {
     this.check();
     const src = this.getBuffer(id);
     const size = Math.ceil(nbytes / 4) * 4;
@@ -212,7 +238,8 @@ export class WebGPUBridge {
   // ------------------------------------------------------------------ programs
 
   /** Compile a WGSL kernel into a compute pipeline. Rejects with the WGSL compiler messages on failure. */
-  async compile(name: string, code: string): Promise<number> {
+  compile(name: string, code: string): Promise<number> { return this.guard(this.compileImpl(name, code)); }
+  private async compileImpl(name: string, code: string): Promise<number> {
     this.check();
     const kinds = parseBindings(code);
     this.device.pushErrorScope("validation");
@@ -312,7 +339,8 @@ export class WebGPUBridge {
   }
 
   /** Wait for all submitted GPU work. Rejects with any asynchronous validation errors collected since the last check. */
-  async sync(): Promise<void> {
+  sync(): Promise<void> { return this.guard(this.syncImpl()); }
+  private async syncImpl(): Promise<void> {
     this.check();
     this.flush();
     await this.device.queue.onSubmittedWorkDone();

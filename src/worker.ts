@@ -137,6 +137,7 @@ assert Device.DEFAULT == ${JSON.stringify(device)}, Device.DEFAULT
   if (config.interruptBuffer) {
     interruptBuffer = config.interruptBuffer;
     py.setInterruptBuffer(interruptBuffer);
+    bridge?.setInterruptBuffer(interruptBuffer);
   }
   py.setStdout(makeWriter("stdout"));
   py.setStderr(makeWriter("stderr"));

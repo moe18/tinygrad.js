@@ -9,7 +9,9 @@ Usage inside Pyodide (the TypeScript runtime does this for you)::
 from __future__ import annotations
 import os, sys
 
-__all__ = ["install", "stats", "device_info", "applied_patches"]
+__all__ = ["install", "stats", "device_info", "applied_patches", "run_training", "TrainingResult"]
+
+from .training import run_training, TrainingResult  # imports tinygrad lazily, at call time
 
 # Browser constraints, applied through tinygrad's own configuration knobs:
 # PARALLEL=0: tinygrad >= 0.13 compiles kernels in a multiprocessing pool; Pyodide has no processes.

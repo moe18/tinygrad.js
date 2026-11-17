@@ -36,6 +36,29 @@ loss.backward()
 print("dloss/dw:\\n", w.grad.numpy())
 `,
   "Train an MLP (TinyJit + Adam)": mlpTraining,
+  "Train with run_training": `# tinygrad_js.run_training: write a plain step function; the helper runs a few plain
+# warm-up steps, then the rest under TinyJit, and falls back to plain execution if TinyJit can't be used safely.
+from tinygrad import Tensor, nn
+from tinygrad.nn.optim import Adam
+from tinygrad_js import run_training
+
+Tensor.manual_seed(0)
+l1, l2 = nn.Linear(2, 32), nn.Linear(32, 1)
+opt = Adam(nn.state.get_parameters([l1, l2]), lr=0.02)
+X = Tensor.rand(512, 2) * 2 - 1
+Y = ((X * X).sum(axis=1, keepdim=True) < 0.4).float()
+
+def train_step(x, y):
+  opt.zero_grad()
+  loss = l2(l1(x).relu()).binary_crossentropy_logits(y)
+  loss.backward()
+  opt.step()
+  return loss
+
+result = run_training(train_step, steps=200, args=(X, Y), print_every=50)
+print(result.summary())
+print("warm-up losses (plain, safe to grade):", [round(v, 4) for v in result.warmup_losses])
+`,
   "Show generated WGSL": `# DEBUG=4 makes tinygrad print the kernels it generates: these WGSL compute shaders run on your GPU
 from tinygrad import Tensor
 from tinygrad.helpers import Context

@@ -76,6 +76,25 @@ test.describe("lifecycle (cross-origin isolated page)", () => {
     expect((await s.run("from tinygrad import Tensor\nprint((Tensor([1, 2]) * 2).tolist())")).stdout.trim()).toBe("[2, 4]");
   });
 
+  test("repeated interrupts while Python is blocked on GPU readbacks keep the environment (regression)", async () => {
+    // An interrupt landing while run_sync waits for a GPU promise used to be raised inside Pyodide's promise callback,
+    // which hung the run and forced a worker restart. The bridge now parks it and Python re-raises it in user code.
+    const results = await s.page.evaluate(async () => {
+      const rt = (window as any).rt;
+      await rt.run("from tinygrad import Tensor, Device\nxs = Tensor.rand(256).realize()");
+      const out: string[] = [];
+      for (let i = 0; i < 10; i++) {
+        const p = rt.run("while True:\n  xs = (xs * 1.0001).realize(); xs.numpy(); Device['WEBGPU'].synchronize()");
+        await new Promise((res) => setTimeout(res, 150 + Math.random() * 300));
+        const mode = await rt.interrupt();
+        out.push(`${mode}/${(await p).status}`);
+      }
+      return out;
+    });
+    expect(results).toEqual(Array(10).fill("signal/interrupted"));
+    expect((await s.run("xs.shape")).result).toBe("(256,)");
+  });
+
   test("timeoutMs interrupts runaway code", async () => {
     const r = await s.run("while True: pass", { timeoutMs: 500 });
     expect(r.ok).toBe(false);
