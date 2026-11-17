@@ -1,0 +1,55 @@
+{
+  "name": "tinygrad-web",
+  "version": "0.1.0",
+  "description": "Run upstream tinygrad in the browser with Pyodide on the browser's WebGPU",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./worker.js": "./dist/worker.js",
+    "./bridge": {
+      "types": "./dist/bridge.d.ts",
+      "import": "./dist/bridge.js"
+    },
+    "./assets/*": "./dist/assets/*",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "python",
+    "README.md",
+    "RESEARCH.md",
+    "LICENSE",
+    "THIRD_PARTY_NOTICES.md"
+  ],
+  "sideEffects": false,
+  "keywords": [
+    "tinygrad",
+    "pyodide",
+    "webgpu",
+    "machine-learning",
+    "wasm",
+    "python"
+  ],
+  "scripts": {
+    "fetch:assets": "node scripts/fetch-assets.mjs",
+    "build": "node scripts/build.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "playwright test",
+    "bench": "node benchmarks/run.mjs",
+    "serve": "node scripts/serve.mjs"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.63.0",
+    "@types/node": "^22.20.5",
+    "@webgpu/types": "^0.1.66",
+    "esbuild": "^0.25.12",
+    "typescript": "^5.9.3"
+  }
+}
