@@ -1,0 +1,322 @@
+{
+  "label": "swiftshader-chromium153-linux",
+  "date": "2026-11-17T03:52:45.002Z",
+  "quick": false,
+  "host": {
+    "cpu": "Intel(R) Xeon(R) Processor @ 2.10GHz",
+    "cores": 4,
+    "platform": "linux 6.18.44-fc-v553"
+  },
+  "init": {
+    "pyodideMs": 1893.8050000001676,
+    "packagesMs": 455.2299999999814,
+    "webgpuMs": 11.180000000167638,
+    "tinygradImportMs": 658.8649999997579,
+    "totalMs": 3158.910000000149
+  },
+  "runtime": {
+    "tinygradDevice": "WEBGPU",
+    "gpu": {
+      "vendor": "google",
+      "architecture": "swiftshader",
+      "device": "",
+      "description": "",
+      "isFallbackAdapter": true,
+      "features": [
+        "core-features-and-limits",
+        "timestamp-query"
+      ],
+      "limits": {
+        "maxBufferSize": 1073741824,
+        "maxStorageBufferBindingSize": 1073741824,
+        "maxStorageBuffersPerShaderStage": 10,
+        "maxComputeWorkgroupStorageSize": 32768,
+        "maxComputeInvocationsPerWorkgroup": 256,
+        "maxComputeWorkgroupsPerDimension": 65535
+      }
+    },
+    "tinygradVersion": "0.14.0",
+    "pyodideVersion": "314.0.8",
+    "pythonVersion": "3.14.2",
+    "syncMode": "jspi",
+    "interruptMode": "signal",
+    "crossOriginIsolated": true,
+    "diagnostics": [
+      "the WebGPU adapter is a software fallback adapter (e.g. SwiftShader): kernels run through WebGPU but on the CPU",
+      "tinygrad.js patch: Tensor._buffer: device-less tensors are realized on Device.DEFAULT instead of CPU"
+    ]
+  },
+  "userAgent": "153.0.8010.12",
+  "browser": {
+    "device_default": "WEBGPU",
+    "quick": false,
+    "runs": [
+      {
+        "bench": "first_kernel",
+        "device": "WEBGPU",
+        "first_ms": 53.98999999999976,
+        "warm_ms": 5.282500000000079
+      },
+      {
+        "bench": "elementwise",
+        "device": "WEBGPU",
+        "n": 1024,
+        "ms": 5.164999999999864,
+        "gbps": 0.0023790900290416887
+      },
+      {
+        "bench": "elementwise",
+        "device": "WEBGPU",
+        "n": 65536,
+        "ms": 5.169999999999675,
+        "gbps": 0.15211450676983548
+      },
+      {
+        "bench": "elementwise",
+        "device": "WEBGPU",
+        "n": 1048576,
+        "ms": 13.255000000000017,
+        "gbps": 0.9492955111278751
+      },
+      {
+        "bench": "elementwise",
+        "device": "WEBGPU",
+        "n": 4194304,
+        "ms": 43.6725,
+        "gbps": 1.1524792031598832
+      },
+      {
+        "bench": "matmul",
+        "device": "WEBGPU",
+        "n": 64,
+        "ms": 8.880000000000443,
+        "gflops": 0.0590414414414385
+      },
+      {
+        "bench": "matmul",
+        "device": "WEBGPU",
+        "n": 128,
+        "ms": 7.954999999999934,
+        "gflops": 0.5272538026398534
+      },
+      {
+        "bench": "matmul",
+        "device": "WEBGPU",
+        "n": 256,
+        "ms": 15.584999999999738,
+        "gflops": 2.152995316009019
+      },
+      {
+        "bench": "matmul",
+        "device": "WEBGPU",
+        "n": 512,
+        "ms": 47.834999999999184,
+        "gflops": 5.611695536740976
+      },
+      {
+        "bench": "matmul",
+        "device": "WEBGPU",
+        "n": 1024,
+        "ms": 363.1649999999986,
+        "gflops": 5.913245075929696
+      },
+      {
+        "bench": "readback",
+        "device": "WEBGPU",
+        "bytes": 4096,
+        "ms": 3.3379999999997523,
+        "mbps": 1.2270820850809778
+      },
+      {
+        "bench": "readback",
+        "device": "WEBGPU",
+        "bytes": 4194304,
+        "ms": 7.987000000000322,
+        "mbps": 525.1413547013685
+      },
+      {
+        "bench": "readback",
+        "device": "WEBGPU",
+        "bytes": 16777216,
+        "ms": 21.52700000000003,
+        "mbps": 779.356900636409
+      },
+      {
+        "bench": "mlp_train",
+        "device": "WEBGPU",
+        "jit": false,
+        "steps": 50,
+        "ms_per_step": 36.67649999999998,
+        "first_loss": 0.26073387265205383,
+        "last_loss": 0.10565580427646637
+      },
+      {
+        "bench": "mlp_train",
+        "device": "WEBGPU",
+        "jit": true,
+        "steps": 50,
+        "ms_per_step": 4.348399999999977,
+        "first_loss": 0.2501564919948578,
+        "last_loss": 0.08916524052619934
+      },
+      {
+        "bench": "first_kernel",
+        "device": "CPU",
+        "first_ms": 44.014999999999915,
+        "warm_ms": 13.2475000000003
+      },
+      {
+        "bench": "elementwise",
+        "device": "CPU",
+        "n": 1024,
+        "ms": 21.264999999999645,
+        "gbps": 0.0005778509287561817
+      },
+      {
+        "bench": "elementwise",
+        "device": "CPU",
+        "n": 16384,
+        "ms": 182.0549999999983,
+        "gbps": 0.0010799373815605275
+      },
+      {
+        "bench": "matmul",
+        "device": "CPU",
+        "n": 16,
+        "ms": 705.1699999999989,
+        "gflops": 0.000011617056879901318
+      },
+      {
+        "bench": "matmul",
+        "device": "CPU",
+        "n": 32,
+        "ms": 3691.0899999999992,
+        "gflops": 0.000017755188846655058
+      },
+      {
+        "bench": "mlp_train",
+        "device": "CPU",
+        "jit": false,
+        "steps": 3,
+        "ms_per_step": 4963.163333333334,
+        "first_loss": 0.22136542201042175,
+        "last_loss": 0.18874788284301758
+      }
+    ]
+  },
+  "native": {
+    "device_default": "CPU",
+    "quick": false,
+    "runs": [
+      {
+        "bench": "first_kernel",
+        "device": "CPU",
+        "first_ms": 49.411760000111826,
+        "warm_ms": 0.9518769998067
+      },
+      {
+        "bench": "elementwise",
+        "device": "CPU",
+        "n": 1024,
+        "ms": 1.3685520000308316,
+        "gbps": 0.008978833102230072
+      },
+      {
+        "bench": "elementwise",
+        "device": "CPU",
+        "n": 65536,
+        "ms": 1.0678830001324968,
+        "gbps": 0.7364402279111326
+      },
+      {
+        "bench": "elementwise",
+        "device": "CPU",
+        "n": 1048576,
+        "ms": 2.032024500067564,
+        "gbps": 6.192303291412886
+      },
+      {
+        "bench": "elementwise",
+        "device": "CPU",
+        "n": 4194304,
+        "ms": 4.122687500057509,
+        "gbps": 12.208455770489008
+      },
+      {
+        "bench": "matmul",
+        "device": "CPU",
+        "n": 64,
+        "ms": 2.021849999891856,
+        "gflops": 0.25931102704357045
+      },
+      {
+        "bench": "matmul",
+        "device": "CPU",
+        "n": 128,
+        "ms": 2.49972700021317,
+        "gflops": 1.6779048270640438
+      },
+      {
+        "bench": "matmul",
+        "device": "CPU",
+        "n": 256,
+        "ms": 3.9622219996999775,
+        "gflops": 8.468589595065792
+      },
+      {
+        "bench": "matmul",
+        "device": "CPU",
+        "n": 512,
+        "ms": 13.612372999887157,
+        "gflops": 19.719960362695417
+      },
+      {
+        "bench": "matmul",
+        "device": "CPU",
+        "n": 1024,
+        "ms": 546.6012859997136,
+        "gflops": 3.928793625269892
+      },
+      {
+        "bench": "readback",
+        "device": "CPU",
+        "bytes": 4096,
+        "ms": 0.20276499999454245,
+        "mbps": 20.20072497773406
+      },
+      {
+        "bench": "readback",
+        "device": "CPU",
+        "bytes": 4194304,
+        "ms": 1.2333403999946313,
+        "mbps": 3400.7675415629437
+      },
+      {
+        "bench": "readback",
+        "device": "CPU",
+        "bytes": 16777216,
+        "ms": 3.659216599953652,
+        "mbps": 4584.920171222579
+      },
+      {
+        "bench": "mlp_train",
+        "device": "CPU",
+        "jit": false,
+        "steps": 50,
+        "ms_per_step": 29.76259989999562,
+        "first_loss": 0.2607339024543762,
+        "last_loss": 0.10565581172704697
+      },
+      {
+        "bench": "mlp_train",
+        "device": "CPU",
+        "jit": true,
+        "steps": 50,
+        "ms_per_step": 0.5118368200055556,
+        "first_loss": 0.2501564621925354,
+        "last_loss": 0.08916526287794113
+      }
+    ],
+    "version": "0.14.0"
+  }
+}
