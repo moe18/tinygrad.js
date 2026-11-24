@@ -106,6 +106,7 @@ runtime.destroy(): Promise<void>
 | `packages` | `[]` | Extra Pyodide packages or wheel URLs to load at startup. |
 | `torch` | `true` | Make `import torch` resolve to the PyTorch-compatible API ([`import torch`](#import-torch)). Costs nothing until imported. |
 | `network` | `"none"` | `"none"` removes `fetch`/XHR/WebSocket/… from the worker after startup. `"allow"` keeps them. See [Safety](#safety-and-isolation). |
+| `loadPackagesOnImport` | `false` | Before each `run()`, load the Pyodide packages the code imports (pandas, matplotlib, scipy, scikit-learn, …) from `pyodideIndexURL`. Each is downloaded the first time it is imported; progress goes to `onStatus`. Works with `network: "none"`: only the runtime's own package loader can fetch, and only from the Pyodide distribution. |
 | `maxGpuMemoryBytes` | unlimited | Cap on GPU buffer memory. Exceeding it raises `MemoryError` in Python. |
 | `timeoutMs` | `0` (none) | Default per-`run()` time limit. |
 | `initTimeoutMs` | `120000` | |
@@ -324,7 +325,8 @@ Takeaways:
 
 ```sh
 npm install
-npm run fetch:assets -- --pyodide   # tinygrad wheels + self-hosted Pyodide (needed: tests never use a CDN)
+npm run fetch:assets -- --pyodide six   # tinygrad wheels + self-hosted Pyodide (needed: tests never use a CDN);
+                                        # `six` is the package tests/packages.test.ts loads (skipped without it)
 npm run build
 npx playwright test                 # both tinygrad versions; add --project=tinygrad-0.14.0 for one
 ```

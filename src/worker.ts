@@ -16,6 +16,7 @@ interface PyodideLike {
   version: string;
   FS: { mkdirTree(p: string): void; writeFile(p: string, d: string): void };
   loadPackage(names: string | string[], opts?: { messageCallback?: (m: string) => void; errorCallback?: (m: string) => void }): Promise<unknown>;
+  loadPackagesFromImports(code: string, opts?: { messageCallback?: (m: string) => void; errorCallback?: (m: string) => void }): Promise<unknown>;
   runPython(code: string): unknown;
   runPythonAsync(code: string): Promise<unknown>;
   registerJsModule(name: string, mod: object): void;
@@ -34,6 +35,20 @@ let bridge: WebGPUBridge | null = null;
 let info: RuntimeInfo | null = null;
 let currentRun = 0;
 let interruptBuffer: Int32Array | undefined;
+// loadPackagesOnImport: the runtime's own package downloads, which must keep working after lockDownNetwork().
+let loadPackagesOnImport = false;
+let nativeFetch: typeof fetch | null = null;
+let packageOrigins: string[] = [];
+let loadingPackages = false;
+
+/** fetch for Pyodide's package loader only: GET requests to the Pyodide distribution, while a package load is in progress. */
+const packageFetch: typeof fetch = (input, init) => {
+  const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url, self.location.href).href;
+  const method = (init?.method ?? (typeof input === "object" && "method" in input ? input.method : "GET")).toUpperCase();
+  if (!nativeFetch || !loadingPackages || method !== "GET" || !packageOrigins.some((o) => url.startsWith(o)))
+    return Promise.reject(new Error("network access (fetch) is disabled in this tinygrad.js runtime"));
+  return nativeFetch(input, init);
+};
 
 function makeWriter(stream: "stdout" | "stderr") {
   const dec = new TextDecoder();
@@ -57,7 +72,11 @@ function lockDownNetwork(): void {
     try {
       Object.defineProperty(self, name, {
         configurable: false, enumerable: false,
-        get() { throw new Error(`network access (${name}) is disabled in this tinygrad.js runtime`); },
+        get() {
+          // Python is not running while packages load, so user code cannot reach this.
+          if (name === "fetch" && loadingPackages && nativeFetch) return packageFetch;
+          throw new Error(`network access (${name}) is disabled in this tinygrad.js runtime`);
+        },
       });
     } catch { /* not present in this browser */ }
   }
@@ -148,6 +167,11 @@ assert Device.DEFAULT == ${JSON.stringify(device)}, Device.DEFAULT
   }
   py.setStdout(makeWriter("stdout"));
   py.setStderr(makeWriter("stderr"));
+  loadPackagesOnImport = config.loadPackagesOnImport;
+  if (loadPackagesOnImport) {
+    nativeFetch = self.fetch.bind(self);
+    packageOrigins = [new URL(indexURL, self.location.href).href];
+  }
   if (config.network === "none") lockDownNetwork();
 
   const versions = py.runPython(
@@ -172,11 +196,29 @@ assert Device.DEFAULT == ${JSON.stringify(device)}, Device.DEFAULT
   return info;
 }
 
+/**
+ * Load the Pyodide packages `code` imports that are not loaded yet (a no-op when there are none). Failures do not stop the
+ * run: they are written to the run's stderr, and the import then fails in Python with the usual ModuleNotFoundError.
+ */
+async function loadImportedPackages(id: number, code: string): Promise<void> {
+  if (!py) return;
+  const warn = (text: string) => post({ type: "stream", id, stream: "stderr", text: text.endsWith("\n") ? text : text + "\n" });
+  loadingPackages = true;
+  try {
+    await py.loadPackagesFromImports(code, { messageCallback: status, errorCallback: warn });
+  } catch (e) {
+    warn(`tinygrad.js: could not load the packages this code imports: ${e instanceof Error ? e.message : String(e)}`);
+  } finally {
+    loadingPackages = false;
+  }
+}
+
 const DELTA_KEYS: (keyof GpuStatsDelta)[] = ["kernelsCompiled", "kernelsDispatched", "bytesUploaded", "bytesDownloaded", "readbacks"];
 
 async function run(id: number, code: string): Promise<RunReply> {
   if (!py) throw new Error("runtime is not initialized");
   currentRun = id;
+  if (loadPackagesOnImport) await loadImportedPackages(id, code);
   if (interruptBuffer) Atomics.store(interruptBuffer, 0, 0);
   const before: GpuStats | null = bridge ? { ...bridge.counters } : null;
   const runFn = (py.globals.get("tinygrad_js") as { _runner: { run: (c: string) => Promise<PyProxyLike> } })._runner.run;
