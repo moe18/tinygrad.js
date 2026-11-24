@@ -16,4 +16,7 @@ dependencies = ["tinygrad>=0.12.0,<0.15"]
 
 [tool.setuptools]
 package-dir = { "" = "python" }
-packages = ["tinygrad_js"]
+# tinygrad_js._shims.torch is the PyTorch-compatible API. It is only importable as `torch` after tinygrad_js.install_torch().
+packages = ["tinygrad_js", "tinygrad_js._shims", "tinygrad_js._shims.torch", "tinygrad_js._shims.torch.autograd", "tinygrad_js._shims.torch.backends",
+            "tinygrad_js._shims.torch.cuda", "tinygrad_js._shims.torch.nn", "tinygrad_js._shims.torch.nn.utils", "tinygrad_js._shims.torch.optim",
+            "tinygrad_js._shims.torch.utils", "tinygrad_js._shims.torch.utils.data"]

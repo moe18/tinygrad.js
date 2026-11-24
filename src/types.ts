@@ -25,6 +25,13 @@ export interface CreateTinygradOptions {
    * security boundary; see README "Safety".
    */
   network?: "none" | "allow";
+  /**
+   * Make `import torch` work in user code (default `true`). The module is tinygrad.js's PyTorch-compatible shim: the commonly used
+   * part of the PyTorch API (tensors, autograd, `torch.nn`, `torch.optim`, `torch.utils.data`, save/load) implemented on tinygrad
+   * and running on WebGPU. It is not PyTorch; see docs/TORCH.md for coverage and differences. Needs tinygrad >= 0.14.
+   * Set `false` to leave `torch` unimportable (or to provide your own package via `packages`).
+   */
+  torch?: boolean;
   /** Upper bound (bytes) for GPU buffer memory tinygrad may allocate. Exceeding it raises MemoryError in Python. */
   maxGpuMemoryBytes?: number;
   /** Default time limit for each `run()` in milliseconds. 0 = no limit (default). */
@@ -94,6 +101,8 @@ export interface RuntimeInfo {
   crossOriginIsolated: boolean;
   /** Notes about fallbacks or limitations detected during initialization. */
   diagnostics: string[];
+  /** True when `import torch` resolves to tinygrad.js's PyTorch-compatible shim (see `CreateTinygradOptions.torch`). */
+  torchShim: boolean;
   timings: InitTimings;
 }
 

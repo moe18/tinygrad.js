@@ -11,7 +11,10 @@ export const test = base.extend<TestOptions>({ tinygradVersion: ["0.14.0", { opt
 export { expect };
 
 const root = path.resolve(import.meta.dirname, "..");
-const prelude = fs.readFileSync(path.join(root, "tests/programs/_prelude.py"), "utf8");
+const preludes: Record<string, string> = {};
+function prelude(dir: string): string {
+  return (preludes[dir] ??= fs.readFileSync(path.join(root, "tests", dir, "_prelude.py"), "utf8"));
+}
 
 /** Counts tinygrad kernels compiled for the PYTHON (CPU) device: GPU tests assert it stays 0. */
 const INSTRUMENT = `
@@ -28,8 +31,8 @@ export interface Session {
   page: Page;
   info: RuntimeInfo;
   run(code: string, opts?: { timeoutMs?: number }): Promise<RunResult>;
-  /** Run tests/programs/<name>.py and return its RESULT_JSON plus GPU evidence. */
-  program(name: string): Promise<{ result: Record<string, unknown>; run: RunResult; pythonDeviceKernels: number }>;
+  /** Run tests/<dir>/<name>.py (dir defaults to "programs") and return its RESULT_JSON plus GPU evidence. */
+  program(name: string, dir?: string, opts?: { timeoutMs?: number }): Promise<{ result: Record<string, unknown>; run: RunResult; pythonDeviceKernels: number }>;
   close(): Promise<void>;
 }
 
@@ -50,9 +53,9 @@ export async function openSession(browser: Browser, opts: CreateTinygradOptions 
   if (!instrumented.ok) throw new Error(`instrumentation failed: ${JSON.stringify(instrumented.error)}`);
   return {
     page, info, run,
-    async program(name) {
-      const src = fs.readFileSync(path.join(root, "tests/programs", `${name}.py`), "utf8");
-      const r = await run(prelude + "\n" + src);
+    async program(name, dir = "programs", o = {}) {
+      const src = fs.readFileSync(path.join(root, "tests", dir, `${name}.py`), "utf8");
+      const r = await run(prelude(dir) + "\n" + src, o);
       if (!r.ok) throw new Error(`${name} failed: ${r.error?.traceback || r.error?.message}\n${r.stdout}\n${r.stderr}`);
       const line = r.stdout.split("\n").find((l) => l.startsWith("RESULT_JSON:"));
       if (!line) throw new Error(`${name}: no RESULT_JSON in output:\n${r.stdout}`);
@@ -66,12 +69,17 @@ export async function openSession(browser: Browser, opts: CreateTinygradOptions 
   };
 }
 
+/** Results of tests/torch_programs/*.py under real PyTorch (tests/reference/generate_torch.py). */
+export function torchReference(): { torch: string; results: Record<string, Record<string, unknown>> } {
+  return JSON.parse(fs.readFileSync(path.join(root, "tests/reference/torch.json"), "utf8"));
+}
+
 export function reference(version: string): Record<string, Record<string, unknown>> {
   const file = path.join(root, "tests/reference", `cpu-${version}.json`);
   return JSON.parse(fs.readFileSync(file, "utf8")).results;
 }
 
-interface ArrayValue { shape: number[]; dtype: string; data: number[] }
+interface ArrayValue { shape: number[]; dtype: string; data: (number | string)[] }
 const isArray = (v: unknown): v is ArrayValue => typeof v === "object" && v !== null && "data" in v && "shape" in v;
 
 /** Recursively compare a browser result with the native CPU reference. Returns the max abs error seen for floats. */
@@ -84,6 +92,7 @@ export function compareResults(got: unknown, want: unknown, where: string, tol =
     expect(g.dtype, `${where}: dtype`).toEqual(want.dtype);
     for (let i = 0; i < want.data.length; i++) {
       const a = g.data[i], b = want.data[i];
+      if (typeof b === "string") { expect(a, `${where}[${i}]`).toBe(b); continue; }   // "nan" / "inf" / "-inf" (torch programs)
       if (Number.isNaN(b)) { expect(Number.isNaN(a), `${where}[${i}] NaN`).toBe(true); continue; }
       const err = Math.abs(a - b);
       maxErr = Math.max(maxErr, err);

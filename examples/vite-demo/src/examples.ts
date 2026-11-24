@@ -1,4 +1,5 @@
 import mlpTraining from "../../python/mlp_training.py?raw";
+import torchMlp from "../../python/torch_mlp.py?raw";
 
 export const EXAMPLES: Record<string, string> = {
   "Tensor basics": `from tinygrad import Tensor, Device
@@ -36,6 +37,7 @@ loss.backward()
 print("dloss/dw:\\n", w.grad.numpy())
 `,
   "Train an MLP (TinyJit + Adam)": mlpTraining,
+  "PyTorch code (import torch)": torchMlp,
   "Train with run_training": `# tinygrad_js.run_training: write a plain step function; the helper runs a few plain
 # warm-up steps, then the rest under TinyJit, and falls back to plain execution if TinyJit can't be used safely.
 from tinygrad import Tensor, nn
