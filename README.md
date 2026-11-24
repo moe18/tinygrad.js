@@ -26,6 +26,10 @@ This isn't a reimplementation. tinygrad.js installs the unmodified tinygrad whee
 `WEBGPU` device to it. `Tensor`, autograd, `nn`, the optimizers, `TinyJit`, the scheduler and the WGSL code generator
 are all upstream code.
 
+**PyTorch-style code runs too.** `import torch` gives a PyTorch-compatible API implemented on tinygrad (it is not PyTorch itself):
+tensors, autograd, `torch.nn`, `torch.optim`, `DataLoader`, `torch.save`/`load`. Eleven tutorial-style PyTorch programs, up to a
+nanoGPT-style transformer, run unmodified on WebGPU and match real PyTorch's numbers. See [`import torch`](#import-torch).
+
 ```
 browser app ──► tinygrad.js (TypeScript API) ──► Web Worker
                                                      │
@@ -46,7 +50,7 @@ What is verified, and where (see [Testing](#testing)):
 
 | | |
 |---|---|
-| ✅ verified | Chromium 153 (headless), WebGPU through Dawn's **SwiftShader** adapter: the real WebGPU API and real WGSL compute shaders, executed on the CPU because the test machine has no GPU. 60 Playwright tests pass: 38 on tinygrad 0.14.0 (including the demo) and 22 on tinygrad 0.12.0 (1 skipped because it doesn't apply to 0.12). Results are compared against native upstream tinygrad on CPU. |
+| ✅ verified | Chromium 153 (headless), WebGPU through Dawn's **SwiftShader** adapter: the real WebGPU API and real WGSL compute shaders, executed on the CPU because the test machine has no GPU. 77 Playwright tests pass: 54 on tinygrad 0.14.0 (including the demo and the [`import torch`](#import-torch) programs) and 23 on tinygrad 0.12.0 (14 skipped there: 13 need the torch layer, which requires 0.14, and 1 doesn't apply to 0.12). Results are compared against native upstream tinygrad on CPU, and for `import torch` against real PyTorch 2.15. |
 | ⚠️ not verified | Hardware GPUs, Firefox, Safari, mobile browsers. The code uses only standard WebGPU + JSPI and should work wherever both exist, but this hasn't been tested. |
 | ❌ not supported | Browsers without JSPI (WebAssembly JavaScript Promise Integration). See [Browser support](#browser-support). |
 
@@ -100,6 +104,7 @@ runtime.destroy(): Promise<void>
 | `tinygradWheelURL` | bundled wheel | Use another tinygrad wheel. |
 | `workerURL` | bundled `worker.js` | |
 | `packages` | `[]` | Extra Pyodide packages or wheel URLs to load at startup. |
+| `torch` | `true` | Make `import torch` resolve to the PyTorch-compatible API ([`import torch`](#import-torch)). Costs nothing until imported. |
 | `network` | `"none"` | `"none"` removes `fetch`/XHR/WebSocket/… from the worker after startup. `"allow"` keeps them. See [Safety](#safety-and-isolation). |
 | `maxGpuMemoryBytes` | unlimited | Cap on GPU buffer memory. Exceeding it raises `MemoryError` in Python. |
 | `timeoutMs` | `0` (none) | Default per-`run()` time limit. |
@@ -111,8 +116,8 @@ traceback }, result?, durationMs, gpu: { kernelsCompiled, kernelsDispatched, byt
 `run()` never rejects because of a Python error; check `ok`. `result` is the `repr()` of a trailing expression.
 
 **`RuntimeInfo`:** tinygrad device (`"WEBGPU"`/`"PYTHON"`), adapter info (vendor, architecture, `isFallbackAdapter`, features,
-limits), tinygrad/Pyodide/Python versions, `syncMode`, `interruptMode`, init timings, and `diagnostics` (fallbacks, software
-adapter warnings, active tinygrad patches).
+limits), tinygrad/Pyodide/Python versions, `syncMode`, `interruptMode`, init timings, `torchShim` (whether `import torch` is
+available), and `diagnostics` (fallbacks, software adapter warnings, active tinygrad patches).
 
 Python state persists between `run()` calls: variables, imports and compiled kernels. Top-level `await` works.
 
@@ -163,6 +168,48 @@ print(result.summary())  # "200 steps in 1.10s, TinyJit, loss 0.6931 -> 0.0412, 
 `Device["CPU"]` exists too. In the browser it is tinygrad's pure-Python interpreter device, which is correct but very
 slow (see [Benchmarks](#benchmarks)).
 
+### `import torch`
+
+```python
+import torch, torch.nn as nn, torch.nn.functional as F
+from torch.utils.data import DataLoader, TensorDataset
+
+class Net(nn.Module):
+  def __init__(self):
+    super().__init__()
+    self.fc1, self.fc2 = nn.Linear(2, 64), nn.Linear(64, 2)
+  def forward(self, x): return self.fc2(F.relu(self.fc1(x)))
+
+model = Net()
+optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
+for xb, yb in DataLoader(TensorDataset(X, y), batch_size=64, shuffle=True):
+  optimizer.zero_grad()
+  loss = F.cross_entropy(model(xb), yb)
+  loss.backward()
+  optimizer.step()
+print(loss.item(), next(model.parameters()).device)   # ... webgpu
+```
+
+`torch` here is a PyTorch-compatible layer that tinygrad.js implements on top of tinygrad
+([`python/tinygrad_js/_shims/torch`](python/tinygrad_js/_shims/torch)). **It is not PyTorch** (PyTorch has no WebAssembly build),
+and `torch.__version__` says so: `0.1.0+tinygrad.js`.
+
+* **What runs:** tutorial-level PyTorch code, unmodified: tensor operations, autograd, `nn.Module` and the common layers (linear,
+  convolution, normalization, recurrent, attention, transformer), losses, the standard optimizers and LR schedulers, `Dataset` /
+  `DataLoader`, `torch.save` / `torch.load` (PyTorch's checkpoint format, interchangeable with real PyTorch in both directions).
+* **How it is tested:** [eleven PyTorch programs](tests/torch_programs) (tensor basics, autograd, the "Learning PyTorch with Examples"
+  polynomial, layers and losses, optimizers, a Quickstart-style classifier, the CIFAR-10 tutorial CNN and a small ResNet, a
+  nanoGPT-style transformer, GAN/DQN/policy-gradient training patterns, checkpoints, learner-style snippets) run unmodified under real PyTorch 2.15 and under
+  the shim in the browser on WebGPU, and the results must agree (rtol 2e-3 / atol 2e-4).
+* **What does not run:** libraries that depend on PyTorch internals (`torchvision`, `transformers`, `lightning`, ...), custom
+  `autograd.Function`, TorchScript, sparse/complex tensors, most of `torch.linalg`. These raise clear errors.
+* **What behaves differently:** random streams differ from PyTorch's for the same seed; WebGPU has no 64-bit types, so `long` is
+  stored as int32 and `double` as float32; a view does not see later in-place changes of its base tensor; evaluation is lazy, so
+  a step costs tens of milliseconds unless it runs under `run_training` (TinyJit), which accepts PyTorch-style step functions.
+
+[docs/TORCH.md](docs/TORCH.md) has the full coverage list and every known difference. Pass `torch: false` to `createTinygrad` to
+turn it off. It needs tinygrad ≥ 0.14 (the default).
+
 ## Examples
 
 * [`examples/vite-demo`](examples/vite-demo): Vite + TypeScript app with an editor, Run/Stop, console, device info,
@@ -182,6 +229,8 @@ slow (see [Benchmarks](#benchmarks)).
   ```
 * [`examples/python/mlp_training.py`](examples/python/mlp_training.py): trains an MLP with `nn.Linear`, `Adam` and `TinyJit`
   on a synthetic dataset. It runs both in the browser and natively.
+* [`examples/python/torch_mlp.py`](examples/python/torch_mlp.py): plain PyTorch code (`nn.Module`, `DataLoader`, `Adam`, an LR
+  scheduler, `torch.save`). The same file runs in the browser through [`import torch`](#import-torch) and with real PyTorch.
 
 ## Browser support
 
@@ -228,6 +277,7 @@ equivalent to a server-side sandbox.** Code in the worker runs with your page's 
 |---|---|---|
 | `Tensor(x, requires_grad=True)` | removed upstream: every tensor can receive `.grad` | supported (and required for `.grad`) |
 | training mode | `with Context(TRAINING=1):` | `with Tensor.train():` |
+| [`import torch`](#import-torch) | supported | not available (`ModuleNotFoundError`) |
 | test suite | all pass | all pass |
 
 So the brief's autograd example `Tensor([2.0], requires_grad=True)` runs verbatim with `tinygradVersion: "0.12.0"`. On 0.14.0 it
@@ -297,6 +347,7 @@ implementation-defined. Training losses get rtol 1e-3 over 60 steps.
 | autograd (spec example verbatim on 0.12, adapted on 0.14) | `autograd.test.ts` |
 | NN training (SGD+momentum and Adam; TinyJit example) | `training.test.ts` |
 | `run_training` helper: JIT vs plain agreement, speed, fallbacks, interrupt | `run_training.test.ts` |
+| `import torch`: eleven PyTorch programs compared with real PyTorch, `run_training` with PyTorch-style steps, unsupported APIs, opt-out | `torch.test.ts` (0.14 only) |
 | kernel caching, alloc/free, WGSL compile errors, device loss + restart, memory limit | `webgpu.test.ts` |
 | repeated runs, stdout/stderr, interrupt (signal and terminate, incl. during GPU waits), timeouts, network policy, reset, destroy | `init.test.ts` |
 | unsupported environment (no adapter): clear error, `auto` → CPU fallback, `cpu` mode | `init.test.ts` |
@@ -311,11 +362,12 @@ and non-Chromium browsers.
 ```
 src/            TypeScript: index.ts (API), runtime.ts (main thread), worker.ts, bridge.ts (WebGPU), protocol.ts, types.ts
 python/tinygrad_js/   webgpu.py (WEBGPU device), cpu.py, patches.py, training.py (run_training), _runner.py, __init__.py (install)
-tests/          Playwright tests, shared Python programs, native CPU reference fixtures
+python/tinygrad_js/_shims/torch/   the PyTorch-compatible API (`import torch`): _tensor.py, nn/, optim/, utils/data, serialization.py
+tests/          Playwright tests, shared Python programs, native CPU reference fixtures, torch_programs/ + PyTorch references
 benchmarks/     bench.py (browser + native), run.mjs, results/
 examples/       vite-demo/, playground/, python/mlp_training.py
 scripts/        build.mjs, fetch-assets.mjs (sha256-pinned downloads), pins.mjs, serve.mjs
-docs/COMPATIBILITY.md, RESEARCH.md
+docs/COMPATIBILITY.md, docs/TORCH.md, RESEARCH.md
 ```
 
 The build is reproducible. Every third-party artifact (tinygrad wheels, Pyodide release) is pinned by URL and SHA-256 in

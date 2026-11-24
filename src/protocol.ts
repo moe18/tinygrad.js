@@ -7,6 +7,8 @@ export interface InitConfig {
   tinygradWheelURL: string;
   packages: string[];
   network: "none" | "allow";
+  /** Make `import torch` resolve to the PyTorch-compatible shim. */
+  torch: boolean;
   maxGpuMemoryBytes?: number;
   /** Int32Array over a SharedArrayBuffer for Pyodide's interrupt mechanism, when cross-origin isolated. */
   interruptBuffer?: Int32Array;

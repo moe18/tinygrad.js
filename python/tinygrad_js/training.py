@@ -31,6 +31,10 @@ What it does, per step index ``i`` in ``range(steps)``:
   ``jit_fallback_reason`` and that step and all remaining steps run without TinyJit. The step that raised may already
   have been partly applied (e.g. parameters updated) before the error.
 
+``step`` may also be written with the PyTorch-compatible shim (``import torch``, see docs/TORCH.md): pass ``torch`` tensors in
+``args`` and return the loss tensor. The shim's optimizers keep parameters, optimizer state and the learning rate in GPU buffers
+that are updated in place, which is what TinyJit needs to replay a step.
+
 Not detected: Python values the step computes *inside* itself from Python state, e.g. a learning-rate schedule driven by
 a global counter, or ``if epoch > 5:`` on a global. TinyJit freezes whatever they were while recording. Keep step
 functions free of such logic (pass changing values as Tensors), and grade correctness on the warm-up steps.
@@ -98,16 +102,24 @@ def run_training(step:Callable[..., Any], steps:int, *, args:Sequence[Any]|Calla
   * ``print_every``: print ``step i  loss x`` every N steps (0: never).
   """
   from tinygrad import Tensor, TinyJit, Device
+  import sys
   if steps < 0 or warmup < 0: raise ValueError("steps and warmup must be >= 0")
+  # the PyTorch-compatible shim (if it is the loaded `torch`): its tensors wrap tinygrad Tensors
+  shim = sys.modules.get("torch") if getattr(sys.modules.get("torch"), "__tinygrad_js_shim__", False) else None
+  def is_shim_tensor(x) -> bool: return shim is not None and isinstance(x, shim.Tensor)
+  wrap_arg: list[bool] = []   # which positional arguments were torch tensors (they reach `step` as torch tensors again)
 
   def get_args(i:int) -> tuple:
     a = args(i) if callable(args) else args
     a = tuple(a) if isinstance(a, (tuple, list)) else (a,)
+    wrap_arg[:] = [is_shim_tensor(x) for x in a]
+    a = tuple(x._value() if w else x for x, w in zip(a, wrap_arg))   # TinyJit needs tinygrad Tensors as inputs
     if (ts := [x for x in a if isinstance(x, Tensor)]): Tensor.realize(*ts)
     return a
 
   def plain(*a):
-    out = step(*a)
+    out = step(*(shim._mk(x) if w else x for x, w in zip(a, wrap_arg)) if any(wrap_arg) else a)
+    if is_shim_tensor(out): out = out._value()   # computes everything the step left pending, without reading data back
     return out.realize() if isinstance(out, Tensor) else out
 
   def call(fn, i:int, a:tuple|None=None):

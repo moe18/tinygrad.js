@@ -47,10 +47,29 @@ Which to use: 0.14.0 follows current upstream docs. 0.12.0 is the newest release
 3. Generate CPU references with native upstream tinygrad:
    `python -m venv v && v/bin/pip install tinygrad==X numpy && DEV=CPU v/bin/python tests/reference/generate.py`.
 4. Add a Playwright project for the version in `playwright.config.ts` and run `npm test`.
+   For the torch shim also run `DEV=CPU python tests/reference/check_torch_native.py` with the new tinygrad (see the section below).
 5. Things that changed between releases before and are worth checking: `Compiled.__init__` and `Program` signatures,
    `TinyELF`, `Tensor._buffer` (patch guard), new hard-coded device names (`grep -rn '"CPU"' tinygrad`), new process/thread
    usage (`multiprocessing`, `subprocess`), and `WGSLRenderer`'s binding layout (`render_kernel`). The bridge parses bindings
    from the WGSL source, so a layout change shows up as a clear error, not silent corruption.
+
+## The torch shim's dependencies on tinygrad
+
+`import torch` ([docs/TORCH.md](TORCH.md)) is built on tinygrad's public `Tensor` API plus a few behaviours that are not part of a
+stable contract. They are the first things to check when bumping tinygrad; `tests/reference/check_torch_native.py` and
+`tests/torch.test.ts` exercise all of them.
+
+| used by the shim | why |
+|---|---|
+| `Tensor.gradient(*targets, gradient=)` | `backward()` and `torch.autograd.grad` |
+| `Ops.DETACH` in the UOp graph | finding the leaves a result depends on without crossing `detach()` |
+| `Tensor.realize` replaces the realized node in every tensor, and realizing `x.contiguous()` leaves `x`'s graph intact | values can be read before `backward()` without losing the graph |
+| `Tensor.assign` + one `realize` orders reads of the old value before the write | optimizer steps and in-place parameter updates |
+| `UOp.has_buffer_identity()`, `UOp.is_virtual`, `Tensor.clone()` returning a tensor with its own identity | giving every leaf its own storage (equal constants share one graph node) |
+| `Tensor._getitem(indices, value)` | functional `x[idx] = value` |
+| `Device[...].renderer.supported_dtypes()` | narrowing 64-bit dtypes on WebGPU |
+
+The shim checks for `has_buffer_identity`/`is_virtual` and reports "needs tinygrad >= 0.14" otherwise (tinygrad 0.12).
 
 ## Possible upstream contributions
 

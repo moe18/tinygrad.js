@@ -129,6 +129,13 @@ assert Device.DEFAULT == ${JSON.stringify(device)}, Device.DEFAULT
     // open the device now so that errors surface during init rather than in the first user run
     await py.runPythonAsync("from tinygrad import Device; Device['WEBGPU']");
   }
+  let torchShim = false;
+  if (config.torch) {
+    // `import torch` -> the PyTorch-compatible shim in tinygrad_js/_shims (only a sys.path entry; nothing is imported until used)
+    const reason = py.runPython("tinygrad_js.torch_shim_unavailable_reason()") as string | undefined | null;
+    if (reason) diagnostics.push(`\`import torch\` is unavailable: ${reason}`);
+    else torchShim = Boolean(py.runPython("tinygrad_js.install_torch()"));
+  }
   const patches = py.runPython("tinygrad_js.applied_patches()") as PyProxyLike;
   for (const p of patches.toJs() as string[]) diagnostics.push(`tinygrad.js patch: ${p}`);
   patches.destroy();
@@ -159,6 +166,7 @@ assert Device.DEFAULT == ${JSON.stringify(device)}, Device.DEFAULT
     interruptMode: interruptBuffer ? "signal" : "terminate",
     crossOriginIsolated: Boolean(self.crossOriginIsolated),
     diagnostics,
+    torchShim,
     timings,
   };
   return info;

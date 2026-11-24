@@ -8,7 +8,7 @@ test.describe("Vite demo (examples/vite-demo, production build)", () => {
   test.skip(!fs.existsSync(dist), "build the demo first: cd examples/vite-demo && npm install && npm run build");
 
   test("loads, runs every example on WebGPU, and Stop interrupts", async ({ page }) => {
-    test.setTimeout(240_000);
+    test.setTimeout(480_000);
     await page.goto(`${ISOLATED}/examples/vite-demo/dist/`);
     await expect(page.locator("#state")).toHaveText("ready", { timeout: 120_000 });
     await expect(page.locator("#device-info")).toContainText("WEBGPU");
@@ -17,7 +17,7 @@ test.describe("Vite demo (examples/vite-demo, production build)", () => {
     for (const name of names) {
       await page.locator("#examples").selectOption(name);
       await page.locator("#run").click();
-      await expect(page.locator("#state")).toHaveText("ready", { timeout: 120_000 });
+      await expect(page.locator("#state")).toHaveText("ready", { timeout: 240_000 });
       await expect(page.locator("#run-info"), name).toContainText("completed");
     }
     const text = await page.locator("#console").textContent();
@@ -26,6 +26,7 @@ test.describe("Vite demo (examples/vite-demo, production build)", () => {
     expect(text).toMatch(/final loss [\d.]+ \(initial [\d.]+\), accuracy/);
     expect(text).toContain("@compute"); // generated WGSL was printed
     expect(text).toMatch(/200 steps in [\d.]+s, TinyJit, loss [\d.]+ -> [\d.]+/); // run_training example
+    expect(text).toMatch(/restored model agrees: True\nfinal accuracy 0\.[6-9]\d* on webgpu/); // PyTorch example (import torch)
     await page.screenshot({ path: "test-results/demo.png", fullPage: true });
 
     await page.locator("#code").fill("while True:\n  pass");

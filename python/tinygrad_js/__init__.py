@@ -9,7 +9,7 @@ Usage inside Pyodide (the TypeScript runtime does this for you)::
 from __future__ import annotations
 import os, sys
 
-__all__ = ["install", "stats", "device_info", "applied_patches", "run_training", "TrainingResult"]
+__all__ = ["install", "install_torch", "stats", "device_info", "applied_patches", "run_training", "TrainingResult"]
 
 from .training import run_training, TrainingResult  # imports tinygrad lazily, at call time
 
@@ -45,6 +45,33 @@ def install(bridge=None, default_device:str|None="WEBGPU") -> None:
   sys.modules["tinygrad.runtime.ops_cpu"] = cpu
   from . import patches
   patches.apply_all()
+
+def install_torch(force:bool=False) -> bool:
+  """Make ``import torch`` resolve to tinygrad.js's PyTorch-compatible shim (``tinygrad_js/_shims/torch``), which implements the
+  common part of the PyTorch API on top of tinygrad. It is not PyTorch; see docs/TORCH.md.
+
+  Returns True if the shim is (now) importable as ``torch``. Does nothing and returns False if a real ``torch`` package is
+  installed, unless ``force`` is set. Raises ``RuntimeError`` if tinygrad is too old for the shim (it needs tinygrad >= 0.14).
+  """
+  import importlib.util
+  shim_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_shims")
+  if shim_dir in sys.path: return True
+  loaded = sys.modules.get("torch")
+  if loaded is not None and not getattr(loaded, "__tinygrad_js_shim__", False) and not force: return False
+  if not force and importlib.util.find_spec("torch") is not None: return False
+  if (reason := torch_shim_unavailable_reason()) is not None: raise RuntimeError(reason)
+  if force:
+    for name in [n for n in sys.modules if n == "torch" or n.startswith("torch.")]: del sys.modules[name]
+  sys.path.insert(0, shim_dir)
+  importlib.invalidate_caches()
+  return True
+
+def torch_shim_unavailable_reason() -> str|None:
+  """None if the torch shim can run on the installed tinygrad, otherwise why not."""
+  from tinygrad.uop.ops import UOp
+  if all(hasattr(UOp, a) for a in ("has_buffer_identity", "is_virtual")): return None
+  import importlib.metadata
+  return f"the tinygrad.js torch shim needs tinygrad >= 0.14 (found {importlib.metadata.version('tinygrad')})"
 
 def applied_patches() -> list[str]:
   from . import patches
