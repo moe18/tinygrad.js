@@ -26,6 +26,14 @@ export interface CreateTinygradOptions {
    */
   network?: "none" | "allow";
   /**
+   * Before each `run()`, load the Pyodide packages the code imports and that are not loaded yet (for example pandas,
+   * matplotlib, scipy, scikit-learn), from `pyodideIndexURL`. Default `false`: only numpy, tinygrad and `packages` are
+   * available. A package is downloaded the first time code imports it; progress is reported through `onStatus`. Works with
+   * `network: "none"`: the runtime itself may still fetch package files from the Pyodide distribution, user code may not.
+   * A package that fails to load is reported on stderr, and the import then raises `ModuleNotFoundError` as usual.
+   */
+  loadPackagesOnImport?: boolean;
+  /**
    * Make `import torch` work in user code (default `true`). The module is tinygrad.js's PyTorch-compatible shim: the commonly used
    * part of the PyTorch API (tensors, autograd, `torch.nn`, `torch.optim`, `torch.utils.data`, save/load) implemented on tinygrad
    * and running on WebGPU. It is not PyTorch; see docs/TORCH.md for coverage and differences. Needs tinygrad >= 0.14.
