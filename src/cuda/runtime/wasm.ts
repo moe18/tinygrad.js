@@ -64,12 +64,13 @@ export class WasmBackend implements Backend {
     this.maxPages = Math.min(65536, Math.ceil(limit / PAGE) + 2);
     const canShare = typeof SharedArrayBuffer !== "undefined" && (typeof crossOriginIsolated === "undefined" || crossOriginIsolated || isNode());
     let mem: WebAssembly.Memory | null = null;
-    if (canShare) { try { mem = new WebAssembly.Memory({ initial: 32, maximum: this.maxPages, shared: true }); } catch { mem = null; } }
+    const initial = Math.min(32, this.maxPages);
+    if (canShare) { try { mem = new WebAssembly.Memory({ initial, maximum: this.maxPages, shared: true }); } catch { mem = null; } }
     this.shared = mem !== null;
-    this.memory = mem ?? new WebAssembly.Memory({ initial: 32, maximum: this.maxPages });
+    this.memory = mem ?? new WebAssembly.Memory({ initial, maximum: this.maxPages });
     this.tracker = new AllocationTracker({ id: this.id, kind: "wasm" }, limit);
     const hw = (globalThis.navigator as Navigator | undefined)?.hardwareConcurrency ?? 4;
-    this.threads = this.shared && hasWorkers() ? Math.max(0, opts.threads ?? Math.min(16, hw)) : 0;
+    this.threads = opts.threads === 0 ? 0 : this.shared && hasWorkers() ? Math.max(0, opts.threads ?? Math.min(16, hw)) : 0;
     this.executor = new Executor(this.memory);
     this.infoCache = {
       backend: "wasm", name: `CPU (WebAssembly, ${this.threads || 1} thread${this.threads > 1 ? "s" : ""})`, vendor: "", architecture: "wasm32",
@@ -345,7 +346,10 @@ export class WasmBackend implements Backend {
 }
 
 function isNode(): boolean { return Boolean((globalThis as { process?: { versions?: { node?: string } } }).process?.versions?.node); }
-function hasWorkers(): boolean { return typeof Worker !== "undefined" || isNode(); }
+function hasWorkers(): boolean {
+  // a locked-down worker (tinygrad.js network: "none") throws on access to Worker
+  try { return typeof Worker !== "undefined" || isNode(); } catch { return false; }
+}
 
 async function spawnWorker(url: string | URL): Promise<PoolWorker> {
   const sent = new Set<number>();

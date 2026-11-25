@@ -224,7 +224,7 @@ export class Lowering {
       case "ref": return this.resolveType(t.to, env); // references are handled by callers (params / locals)
       case "array": {
         const of = this.resolveType(t.of, env);
-        const n = t.size === null ? -1 : Number(this.constInt(t.size, "array size"));
+        const n = t.size === null ? -1 : Number(this.constInt(t.size, "array size", env));
         if (t.size !== null && n <= 0) fail("type", `array size must be positive (got ${n})`, t.loc);
         return { k: "array", of, n };
       }
@@ -332,8 +332,8 @@ export class Lowering {
     if (f.op !== "const") fail("type", `${what} must be a compile-time constant`, e.loc);
     return f;
   }
-  constInt(e: AExpr, what: string): bigint {
-    const c = this.constValue(e, what) as Expr & { op: "const" };
+  constInt(e: AExpr, what: string, env?: Map<string, Binding>): bigint {
+    const c = this.constValue(e, what, env) as Expr & { op: "const" };
     if (isFloat(c.t.s)) fail("type", `${what} must be an integer`, e.loc);
     return BigInt(c.v as number | bigint);
   }
@@ -628,6 +628,18 @@ export class Lowering {
     }
     const en = this.prog.enums.get(name);
     if (en) return { k: "rv", e: i32(en.value), t: en.t };
+    if (name.includes("::")) {
+      // Struct<args>::member: static constexpr members and static methods
+      const [sname, member] = name.split("::");
+      const sd = this.prog.structs.get(sname);
+      if (sd) {
+        const def = this.instantiateStruct(sd, e.targs ?? [], e.loc);
+        const st = def.statics.get(member);
+        if (st) return { k: "rv", e: cnst(this.vtOf(st.type), st.value), t: st.type };
+        if (def.methods.has(member)) return { k: "fn", name: member, struct: def, loc: e.loc };
+        fail("name", `${sname} has no static member '${member}'`, e.loc);
+      }
+    }
     const g = this.prog.globals.get(name);
     if (g) return this.globalVar(name, g, e.loc);
     if (this.prog.funcs.has(name) || name in BUILTIN_FUNCTIONS || name.startsWith("__builtin_")) return { k: "fn", name, targs: e.targs, loc: e.loc };
@@ -1722,11 +1734,43 @@ export class Lowering {
       this.initArray(lv, t, d.init as AExpr & { k: "init" });
       return;
     }
+    if (t.k === "struct" && lv.k === "mem" && d.init?.k === "init" && !t.def.methods.has("__ctor")) {
+      this.initMemory(lv, t, d.init);
+      return;
+    }
     if (d.init?.k === "construct" && !initVal) {
       initVal = this.construct(t, d.init.args, d.init.loc, d.init.braces);
     }
     const v = initVal ?? (d.init!.k === "init" ? this.initValue(t, d.init as AExpr & { k: "init" }) : this.expr(d.init!));
     this.assign(lv, v, d.loc);
+  }
+
+  /** brace-initialize an aggregate that lives in memory (structs with array members, arrays of structs) */
+  private initMemory(lv: LV & { k: "mem" }, t: CType, init: AExpr): void {
+    if (t.k === "array") {
+      if (init.k !== "init") fail("type", "array initializer must be a braced list", init.loc);
+      this.initArray(lv, t, init);
+      return;
+    }
+    if (t.k === "struct" && init.k === "init") {
+      let pos = 0;
+      const done = new Set<string>();
+      init.items.forEach((it, i) => {
+        const dn = init.designators?.[i];
+        const f = dn ? t.def.fields.find((x) => x.name === dn) : t.def.fields[pos];
+        if (!f) fail("type", dn ? `${t.def.name} has no member '${dn}'` : `too many initializers for ${t.def.name}`, it.loc);
+        pos = t.def.fields.indexOf(f) + 1;
+        done.add(f.name);
+        this.initMemory({ k: "mem", root: lv.root, off: this.addOff(lv.off, f.offset), t: f.type }, f.type, it);
+      });
+      for (const f of t.def.fields) if (!done.has(f.name)) {
+        const target: LV & { k: "mem" } = { k: "mem", root: lv.root, off: this.addOff(lv.off, f.offset), t: f.type };
+        this.initMemory(target, f.type, { k: "init", items: [], loc: init.loc });
+      }
+      return;
+    }
+    const v = init.k === "init" ? (t.k === "struct" ? this.initValue(t, init) : this.initValue(t, init)) : this.expr(init);
+    this.assign(lv, v, init.loc);
   }
 
   private initArray(lv: LV & { k: "mem" }, t: CType & { k: "array" }, init: AExpr & { k: "init" }): void {
@@ -1740,6 +1784,7 @@ export class Lowering {
         this.initArray(target as LV & { k: "mem" }, t.of, (it ?? { k: "init", items: [], loc: init.loc }) as AExpr & { k: "init" });
         continue;
       }
+      if (t.of.k === "struct" && (!it || it.k === "init")) { this.initMemory(target as LV & { k: "mem" }, t.of, it ?? { k: "init", items: [], loc: init.loc }); continue; }
       const v = it ? (it.k === "init" ? this.initValue(t.of, it) : this.expr(it)) : this.zeroValue(t.of, init.loc);
       this.assign(target, v, init.loc);
     }

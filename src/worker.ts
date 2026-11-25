@@ -4,6 +4,7 @@
  * Started by Runtime (runtime.ts); all communication goes through the messages in protocol.ts.
  */
 import { WebGPUBridge } from "./bridge.js";
+import { TinygradCudaHost } from "./cuda/tinygrad-host.js";
 import { PYTHON_FILES } from "./generated/python.js";
 import type { FromWorker, InitConfig, RunReply, ToWorker } from "./protocol.js";
 import type { GpuStats, GpuStatsDelta, InitTimings, RuntimeInfo } from "./types.js";
@@ -144,6 +145,9 @@ import tinygrad
 from tinygrad import Tensor, Device
 assert Device.DEFAULT == ${JSON.stringify(device)}, Device.DEFAULT
 `);
+  // tinygrad.cuda: CUDA kernels on tensors (shares the WebGPU device; CPU tensors use the WebAssembly backend)
+  py.registerJsModule("_tinygrad_js_cuda", new TinygradCudaHost(bridge));
+  py.runPython("tinygrad_js.install_cuda(__import__('_tinygrad_js_cuda'))");
   if (bridge) {
     // open the device now so that errors surface during init rather than in the first user run
     await py.runPythonAsync("from tinygrad import Device; Device['WEBGPU']");

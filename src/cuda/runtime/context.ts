@@ -57,7 +57,7 @@ export class CudaEvent {
   private pending: Promise<void> | null = null;
   constructor(readonly ctx: CudaContext) {}
   /** @internal */ record(p: Promise<void>): void { this.time = null; this.pending = p.then(() => { this.time = performance.now(); }); }
-  async synchronize(): Promise<void> { if (!this.pending) throw new CudaError("cudaErrorInvalidHandle", "event was never recorded"); await this.pending; }
+  async synchronize(): Promise<void> { if (!this.pending) throw new CudaError("cudaErrorInvalidResourceHandle", "event was never recorded"); await this.pending; }
   query(): boolean { return this.time !== null; }
 }
 
@@ -236,6 +236,8 @@ export class CudaModule {
 
   constructor(readonly ctx: CudaContext, readonly source: string, readonly options: CompileOptions) {
     this.parsed = parseModule(source, { ...options, backend: ctx.backend.kind === "webgpu" ? "wgsl" : ctx.backend.kind === "wasm" ? "wasm" : "cuda" });
+    // like nvcc, report semantic errors at compile time: lower every non-template kernel once (block size unspecialized)
+    for (const k of this.parsed.kernels) if (!k.template.length) this.parsed.instantiate(k.name, { block: [0, 0, 0], dynamicShared: 0 }, { mode: "direct" });
     this.hash = hashString(`${COMPILER_VERSION}\n${JSON.stringify({ ...options, headers: undefined })}\n${source}`);
   }
 

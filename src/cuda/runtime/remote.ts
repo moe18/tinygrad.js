@@ -17,7 +17,7 @@
  *   DELETE /v1/sessions/:s
  */
 import { Allocation, AllocationTracker, DevicePtr, type MemoryStats } from "./memory.js";
-import { CudaError } from "./errors.js";
+import { CudaError, cudaError, type CudaErrorName } from "./errors.js";
 import type { Backend, DeviceInfo, Executable, LaunchConfig, LaunchOptions, PrepareRequest, ResolvedArg, SpecKey, SyncReport } from "./backend.js";
 import { encodeScalarBytes } from "./encode.js";
 
@@ -137,7 +137,7 @@ export class RemoteCudaBackend implements Backend {
       const j = (await res.json()) as { ms?: number; printf?: string; error?: { name: string; message: string } };
       if (j.printf) this.printf.push(j.printf);
       if (opts.timing) this.times.push({ name: exe.kernel.displayName, ms: j.ms ?? null });
-      if (j.error) throw new CudaError((j.error.name as never) ?? "cudaErrorLaunchFailure", `remote: ${j.error.message}`);
+      if (j.error) throw new CudaError(j.error.name in cudaError ? j.error.name as CudaErrorName : "cudaErrorLaunchFailure", `remote: ${j.error.message}`);
     });
   }
 
@@ -164,9 +164,10 @@ async function request(cfg: RemoteCudaConfig, method: string, path: string, body
   try { res = await f(cfg.endpoint.replace(/\/$/, "") + path, { method, headers, body: data }); }
   catch (e) { throw new CudaError("cudaErrorDevicesUnavailable", `remote CUDA worker unreachable: ${(e as Error).message}`); }
   if (!res.ok) {
-    let msg = `${res.status} ${res.statusText}`;
-    try { const j = await res.json() as { error?: { message?: string; name?: string } }; if (j.error?.message) msg = j.error.message; } catch { /* not json */ }
-    const name = res.status === 401 || res.status === 403 ? "cudaErrorInitializationError" : res.status === 413 ? "cudaErrorMemoryAllocation" : res.status === 503 ? "cudaErrorDevicesUnavailable" : "cudaErrorLaunchFailure";
+    let msg = `${res.status} ${res.statusText}`, given: string | undefined;
+    try { const j = await res.json() as { error?: { message?: string; name?: string } }; if (j.error?.message) msg = j.error.message; given = j.error?.name; } catch { /* not json */ }
+    const name = given && given in cudaError ? given as CudaErrorName
+      : res.status === 401 || res.status === 403 ? "cudaErrorInitializationError" : res.status === 413 ? "cudaErrorMemoryAllocation" : res.status === 503 ? "cudaErrorDevicesUnavailable" : "cudaErrorLaunchFailure";
     throw new CudaError(name, `remote CUDA worker: ${msg}`);
   }
   return res;

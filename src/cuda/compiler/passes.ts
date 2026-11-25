@@ -42,6 +42,7 @@ export function optimize(k: Kernel, opts: PassOptions): PassReport[] {
   }
   for (let iter = 0; iter < 2; iter++) {
     run("fold", () => foldPass(k, true));
+    run("constprop", () => constPropPass(k));
     run("copyprop", () => copyPropPass(k));
     run("dce", () => dcePass(k, true));
   }
@@ -50,6 +51,7 @@ export function optimize(k: Kernel, opts: PassOptions): PassReport[] {
     run("fold", () => foldPass(k, true));
     run("copyprop", () => copyPropPass(k));
     run("promote", () => promoteLocalsPass(k));
+    run("constprop", () => constPropPass(k));
     run("cse", () => csePass(k));
     run("dce", () => dcePass(k, true));
   }
@@ -202,6 +204,58 @@ function countVar(e: Expr, v: Var): number {
   let c = 0;
   someExpr(e, (x) => { if (x.op === "var" && x.v === v) c++; return false; });
   return c;
+}
+
+// ------------------------------------------------------------------ flow-sensitive constant propagation
+/**
+ * Forward propagation of constant values through re-assigned variables (s = 0; s = s + 1; ...) over structured control
+ * flow: branches start from the incoming facts, variables assigned in a branch or loop are forgotten after it.
+ */
+function constPropPass(k: Kernel): number {
+  let n = 0;
+  type Facts = Map<Var, Expr>;
+  const assignedIn = (l: Stmt[]) => {
+    const vs = new Set<Var>();
+    walkStmts(l, (s) => {
+      if (s.s === "let") vs.add(s.v);
+      if ((s.s === "atomic" || s.s === "warp") && s.result) vs.add(s.result);
+    });
+    return vs;
+  };
+  const sub = (e: Expr, f: Facts) => {
+    if (!f.size) return e;
+    const r = foldExpr(mapExpr(e, (x) => (x.op === "var" && f.has(x.v) ? f.get(x.v)! : x)), true);
+    if (r !== e && !exprEq(r, e)) n++;
+    return r;
+  };
+  const visit = (list: Stmt[], facts: Facts): Stmt[] => {
+    const out: Stmt[] = [];
+    for (const s0 of list) {
+      // loops first: their break condition must not see facts about variables the loop itself changes
+      let s = s0.s === "loop" ? s0 : mapStmtExprs(s0, (e) => sub(e, facts));
+      if (s.s === "let") {
+        if (s.e.op === "const") facts.set(s.v, s.e); else facts.delete(s.v);
+      } else if ((s.s === "atomic" || s.s === "warp") && s.result) facts.delete(s.result);
+      else if (s.s === "if") {
+        const a = new Map(facts), b = new Map(facts);
+        s = { ...s, then: visit(s.then, a), else: visit(s.else, b) };
+        // keep facts that hold on both paths
+        for (const [v, e] of [...facts]) if (!(a.get(v) && b.get(v) && exprEq(a.get(v)!, e) && exprEq(b.get(v)!, e))) facts.delete(v);
+        for (const [v, e] of a) if (b.has(v) && exprEq(b.get(v)!, e) && !facts.has(v)) facts.set(v, e);
+      } else if (s.s === "loop") {
+        const changed = assignedIn([...s.body, ...s.cont]);
+        for (const v of changed) facts.delete(v);
+        const inner = new Map(facts);
+        s = { ...s, body: visit(s.body, new Map(inner)), cont: visit(s.cont, new Map(inner)), breakIf: s.breakIf ? sub(s.breakIf, inner) : null };
+        for (const v of changed) facts.delete(v);
+      }
+      out.push(s);
+    }
+    return out;
+  };
+  // loop bodies were visited with the incoming facts minus loop-assigned variables: their own statements re-derive facts
+  k.body = visit(k.body, new Map());
+  return n;
 }
 
 // ------------------------------------------------------------------ dead code elimination

@@ -20,8 +20,11 @@ export default defineConfig<TestOptions>({
     trace: "off",
   },
   projects: [
-    { name: "tinygrad-0.14.0", use: { tinygradVersion: "0.14.0" } },
-    { name: "tinygrad-0.12.0", use: { tinygradVersion: "0.12.0" }, testIgnore: /init\.test\.ts|demo\.test\.ts|playground\.test\.ts/ },
+    { name: "tinygrad-0.14.0", use: { tinygradVersion: "0.14.0" }, testIgnore: /cuda\// },
+    { name: "tinygrad-0.12.0", use: { tinygradVersion: "0.12.0" }, testIgnore: /init\.test\.ts|demo\.test\.ts|playground\.test\.ts|cuda\// },
+    // CUDA compiler + CPU backend in Node.js (no browser), and the browser suites (WebGPU, tinygrad.cuda in Pyodide, playground)
+    { name: "cuda-node", testMatch: /cuda\/.*\.node\.test\.ts$/ },
+    { name: "cuda-browser", testMatch: /cuda\/.*\.browser\.test\.ts$/, use: { tinygradVersion: "0.14.0" } },
   ],
   webServer: [
     { command: "node scripts/serve.mjs", env: { PORT: "8780", COI: "1" }, url: "http://127.0.0.1:8780/package.json", reuseExistingServer: true },

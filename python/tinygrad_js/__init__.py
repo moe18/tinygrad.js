@@ -9,7 +9,7 @@ Usage inside Pyodide (the TypeScript runtime does this for you)::
 from __future__ import annotations
 import os, sys
 
-__all__ = ["install", "install_torch", "stats", "device_info", "applied_patches", "run_training", "TrainingResult"]
+__all__ = ["install", "install_cuda", "install_torch", "stats", "device_info", "applied_patches", "run_training", "TrainingResult"]
 
 from .training import run_training, TrainingResult  # imports tinygrad lazily, at call time
 
@@ -45,6 +45,14 @@ def install(bridge=None, default_device:str|None="WEBGPU") -> None:
   sys.modules["tinygrad.runtime.ops_cpu"] = cpu
   from . import patches
   patches.apply_all()
+
+def install_cuda(host) -> None:
+  """Make ``tinygrad.cuda`` (CUDA C/C++ kernels on tensors, python/tinygrad_js/cuda.py) importable, backed by the JS host."""
+  from . import cuda
+  cuda.set_host(host)
+  sys.modules["tinygrad.cuda"] = cuda
+  tg = sys.modules.get("tinygrad")
+  if tg is not None: setattr(tg, "cuda", cuda)
 
 def install_torch(force:bool=False) -> bool:
   """Make ``import torch`` resolve to tinygrad.js's PyTorch-compatible shim (``tinygrad_js/_shims/torch``), which implements the

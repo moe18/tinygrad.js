@@ -98,6 +98,15 @@ class Parser {
       return;
     }
   }
+  private skipDeclaration(start: Token): void {
+    for (;;) {
+      const t = this.peek();
+      if (t.k === "eof") fail("syntax", "unterminated declaration", start.loc);
+      if (t.k === "punct" && (t.v === "(" || t.v === "[" || t.v === "{")) { this.skipBalanced(); continue; }
+      this.next();
+      if (t.k === "punct" && t.v === ";") return;
+    }
+  }
   private skipBalanced(): void {
     const open = this.next();
     const close = open.v === "(" ? ")" : open.v === "{" ? "}" : "]";
@@ -274,6 +283,9 @@ class Parser {
     const t = this.peek();
     if (t.k === "pragma") { this.next(); return; }
     if (this.accept(";")) return;
+    // explicit instantiations ("template __global__ void k<64>(float*);", "extern template ...;"): templates are
+    // instantiated on demand from launches, so these only need to be well formed
+    if ((t.v === "template" && !this.is("<", 1)) || (t.v === "extern" && this.is("template", 1))) { this.skipDeclaration(t); return; }
     if (t.v === "template") { this.next(); const tp = this.templateParams(); this.topDecl(out, tp); return; }
     if (t.v === "namespace") {
       this.next();
