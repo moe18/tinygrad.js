@@ -89,7 +89,6 @@ export interface BackendCompileOptions {
   boundsCheck?: boolean;
   fp64?: "error" | "demote";
   warps?: "auto" | "emulate" | "subgroups";
-  simd?: boolean;
 }
 
 /** Backend-specific parts of the specialization key, computed from the actual launch arguments. */

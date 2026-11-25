@@ -72,6 +72,8 @@ export class Program {
   typedefs = new Map<string, { type: TypeExpr; template?: TopDecl & { k: "typedef" } }>();
   globals = new Map<string, GlobalSym>();
   enums = new Map<string, { value: number; t: CType }>();
+  /** names of enum types (values are ints) */
+  enumTypes = new Set<string>();
   hostNames = new Set<string>();
   kernels: FuncDecl[] = [];
   /** module-scope memory (__constant__ / __device__ variables): one Root per symbol, shared by all kernels */
@@ -94,6 +96,7 @@ export class Program {
         case "struct": this.structs.set(d.name, d); break;
         case "typedef": this.typedefs.set(d.name, { type: d.type, template: d.template ? d : undefined }); break;
         case "enum": {
+          if (d.name) this.enumTypes.add(d.name);
           let v = 0;
           const ctx = new Lowering(this, null, {});
           for (const it of d.items) {
@@ -249,6 +252,7 @@ export class Lowering {
         }
         const sd = this.prog.structs.get(name);
         if (sd) return { k: "struct", def: this.instantiateStruct(sd, t.args ?? [], t.loc, env) };
+        if (this.prog.enumTypes.has(name)) return I32;
         if (name.includes("::")) {
           const [outer, inner] = name.split("::");
           const osd = this.prog.structs.get(outer);
@@ -276,7 +280,7 @@ export class Lowering {
         const vtT = p.valueType ? this.resolveType(p.valueType, env) : I32;
         if (a.k !== "expr") fail("type", `template parameter '${p.name}' expects a value`, loc);
         const saved = this.funcStack;
-        const e = this.constValue(a.expr, `template argument '${p.name}'`, i < args.length ? undefined : env);
+        const e = this.constValue(a.expr, `template argument '${p.name}'`, i < args.length ? outer : env);
         this.funcStack = saved;
         env.set(p.name, { k: "const", e: this.convertConstTo(e, vtT, loc), t: vtT });
       }

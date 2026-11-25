@@ -314,16 +314,50 @@ class WGSLGen {
     }
   }
 
+  /**
+   * Whether __syncthreads() must also order global memory (storageBarrier). It must unless no thread can observe
+   * another thread's global write across a barrier: every written buffer is never read by the kernel and is written
+   * either by one store site outside loops or only by commutative atomics whose results are unused. Buffers are
+   * grouped by the launch's alias groups (or all treated as one buffer when those are unknown).
+   */
+  private needsStorageBarrier(): boolean {
+    const k = this.k;
+    type G = { loads: number; stores: number; storeInLoop: boolean; atomics: number; orderSensitiveAtomic: boolean };
+    const groups = new Map<unknown, G>();
+    const key = (r: Root): unknown => r.param === undefined ? r : this.opts.aliasGroups ? `p${this.opts.aliasGroups[r.param] ?? r.param}` : "params";
+    const get = (r: Root) => { const kk = key(r); let g = groups.get(kk); if (!g) groups.set(kk, (g = { loads: 0, stores: 0, storeInLoop: false, atomics: 0, orderSensitiveAtomic: false })); return g; };
+    const COMMUTATIVE = new Set(["add", "sub", "and", "or", "xor", "min", "max"]);
+    let anyWrite = false;
+    const walk = (ss: Stmt[], inLoop: boolean): void => {
+      for (const s of ss) {
+        for (const e of stmtExprs(s)) someExpr(e, (x) => { if (x.op === "load" && x.root.space === "global") get(x.root).loads++; return false; });
+        if (s.s === "store" && s.root.space === "global") { const g = get(s.root); g.stores++; g.storeInLoop ||= inLoop; anyWrite = true; }
+        if (s.s === "atomic" && s.root.space === "global") { const g = get(s.root); g.atomics++; g.orderSensitiveAtomic ||= s.result !== null || !COMMUTATIVE.has(s.fn); anyWrite = true; }
+        if (s.s === "if") { walk(s.then, inLoop); walk(s.else, inLoop); }
+        if (s.s === "loop") { walk(s.body, true); walk(s.cont, true); }
+      }
+    };
+    walk(k.body, false);
+    if (!anyWrite) return false;
+    for (const g of groups.values()) {
+      if (g.stores + g.atomics === 0) continue;
+      const safe = g.loads === 0 && ((g.stores === 1 && g.atomics === 0 && !g.storeInLoop) || (g.stores === 0 && !g.orderSensitiveAtomic));
+      if (!safe) return true;
+    }
+    return false;
+  }
+
   // ------------------------------------------------------------------ memory layouts
   private analyzeRoots(): void {
     const k = this.k;
     const access = new Map<Root, { types: VT[]; atomics: { t: VT; fn: string }[]; stores: VT[] }>();
     const get = (r: Root) => { let a = access.get(r); if (!a) access.set(r, (a = { types: [], atomics: [], stores: [] })); return a; };
     walkStmts(k.body, (s) => {
-      if (s.s === "store") { get(s.root).types.push(s.t); get(s.root).stores.push(s.t); if (s.root.space === "global") this.globalWrites = true; }
-      if (s.s === "atomic") { get(s.root).atomics.push({ t: s.t, fn: s.fn }); if (s.root.space === "global") this.globalWrites = true; }
+      if (s.s === "store") { get(s.root).types.push(s.t); get(s.root).stores.push(s.t); }
+      if (s.s === "atomic") get(s.root).atomics.push({ t: s.t, fn: s.fn });
       for (const e of stmtExprs(s)) someExpr(e, (x) => { if (x.op === "load") get(x.root).types.push(x.t); return false; });
     });
+    this.globalWrites = this.needsStorageBarrier();
     // alias groups: pointer params bound to one buffer share a binding (WebGPU binds whole buffers)
     const groups = new Map<number, Root[]>();
     for (const r of k.roots) {

@@ -211,6 +211,38 @@ and `torch.__version__` says so: `0.1.0+tinygrad.js`.
 [docs/TORCH.md](docs/TORCH.md) has the full coverage list and every known difference. Pass `torch: false` to `createTinygrad` to
 turn it off. It needs tinygrad ≥ 0.14 (the default).
 
+## CUDA kernels
+
+tinygrad.js also compiles **CUDA C/C++ kernels** and runs them on WebGPU (CUDA → WGSL), on the CPU (CUDA → WebAssembly,
+with a worker pool), or, when you explicitly configure one, on a remote NVIDIA GPU (the original source, via NVRTC).
+They run standalone from JavaScript or on tinygrad tensors from Python, where they join the lazy graph and autograd.
+
+```js
+import { CUDA } from "tinygrad.js/cuda";
+const kernel = await CUDA.compile(`__global__ void vector_add(float* a, float* b, float* c, int n) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n) { c[i] = a[i] + b[i]; }
+}`);
+const ctx = kernel.ctx, a = ctx.rand([1024]), b = ctx.rand([1024]), c = ctx.zeros([1024]);
+await kernel.launch({ grid: [4, 1, 1], block: [256, 1, 1], args: [a, b, c, 1024] });
+```
+
+```python
+from tinygrad.cuda import CUDAKernel          # inside the tinygrad.js runtime (tinygrad >= 0.14)
+kernel = CUDAKernel(open("vector_add.cu").read())
+await kernel.launch(grid=(4, 1, 1), block=(256, 1, 1), args=[a, b, c, 1024])   # a, b, c: tinygrad Tensors
+```
+
+Supported CUDA:
+- `__global__`/`__device__` functions, `__shared__`/`__constant__` memory, templates, structs with methods, macros
+- the math library, half and bfloat16, atomics, barriers, warp intrinsics, cooperative-group block and warp tiles
+- `printf`/`assert`, a kernel library (matmul, reductions, softmax, norms, conv, flash attention, quantized, MoE,
+  optimizers) and cuBLAS/cuDNN/cuRAND-style APIs
+
+Constructs a backend can't run exactly (`double` on WebGPU, 64-bit atomics on WebGPU, recursion, …) are rejected with an
+explanation instead of being approximated. Guide, compatibility matrix and differences from native CUDA:
+**[docs/CUDA.md](docs/CUDA.md)**. Remote GPU worker (Docker / Modal / RunPod): [server/cuda-worker](server/cuda-worker/README.md).
+
 ## Examples
 
 * [`examples/vite-demo`](examples/vite-demo): Vite + TypeScript app with an editor, Run/Stop, console, device info,
@@ -230,6 +262,14 @@ turn it off. It needs tinygrad ≥ 0.14 (the default).
   ```
 * [`examples/python/mlp_training.py`](examples/python/mlp_training.py): trains an MLP with `nn.Linear`, `Adam` and `TinyJit`
   on a synthetic dataset. It runs both in the browser and natively.
+* [`examples/cuda-playground`](examples/cuda-playground): CUDA playground, a single HTML page. It has an editor and
+  examples, runs on WebGPU or the CPU, shows outputs, timings, printf and errors, the kernel IR and generated
+  WGSL/WebAssembly, and compares backends. It explains indexing, coalescing, reductions and tiling interactively, and
+  can be embedded with a `postMessage` API. `COI=1 npm run serve`, then open `/examples/cuda-playground/`.
+* [`examples/cuda/vector_add.mjs`](examples/cuda/vector_add.mjs) (`node examples/cuda/vector_add.mjs`),
+  [`examples/python/cuda_vector_add.py`](examples/python/cuda_vector_add.py),
+  [`examples/python/cuda_custom_autograd.py`](examples/python/cuda_custom_autograd.py): CUDA kernels from Node.js, and on
+  tinygrad tensors with custom autograd.
 * [`examples/python/torch_mlp.py`](examples/python/torch_mlp.py): plain PyTorch code (`nn.Module`, `DataLoader`, `Adam`, an LR
   scheduler, `torch.save`). The same file runs in the browser through [`import torch`](#import-torch) and with real PyTorch.
 
@@ -279,6 +319,7 @@ equivalent to a server-side sandbox.** Code in the worker runs with your page's 
 | `Tensor(x, requires_grad=True)` | removed upstream: every tensor can receive `.grad` | supported (and required for `.grad`) |
 | training mode | `with Context(TRAINING=1):` | `with Tensor.train():` |
 | [`import torch`](#import-torch) | supported | not available (`ModuleNotFoundError`) |
+| [`tinygrad.cuda`](#cuda-kernels) (JS `tinygrad.js/cuda` works without tinygrad) | supported | importable, but launches raise `CUDAError` (needs `Tensor.custom_kernel`) |
 | test suite | all pass | all pass |
 
 So the brief's autograd example `Tensor([2.0], requires_grad=True)` runs verbatim with `tinygradVersion: "0.12.0"`. On 0.14.0 it
@@ -355,6 +396,12 @@ implementation-defined. Training losses get rtol 1e-3 over 60 steps.
 | unsupported environment (no adapter): clear error, `auto` → CPU fallback, `cpu` mode | `init.test.ts` |
 | Vite demo production build: every example plus Stop | `demo.test.ts` (needs `examples/vite-demo` built) |
 | playground: trains all four datasets, painting mid-training, shared Python session, WGSL, Stop | `playground.test.ts` |
+| CUDA compiler: lexer, preprocessor, parser, lowering, passes, WGSL/WASM codegen | `cuda/compiler.node.test.ts` (`--project=cuda-node`) |
+| CUDA kernel library on the CPU backend (inline and 4 workers), runtime API, randomized differential tests | `cuda/cpu.node.test.ts` |
+| CUDA remote worker end to end (tokens, CORS, limits, timeouts, isolation) | `cuda/remote.node.test.ts` |
+| CUDA on WebGPU (all cases, differential tests, bounds checks, AUTO selection), CPU pool in a browser | `cuda/webgpu.browser.test.ts` (`--project=cuda-browser`) |
+| `tinygrad.cuda` on WEBGPU and CPU: views, autograd, MLP training, transformer block | `cuda/tinygrad.browser.test.ts` |
+| CUDA playground and its embedding API | `cuda/playground.browser.test.ts` |
 
 Not verified by automated tests: browsers without JSPI (Chromium can't disable JSPI, so that error path is untested), hardware GPUs,
 and non-Chromium browsers.
@@ -363,13 +410,16 @@ and non-Chromium browsers.
 
 ```
 src/            TypeScript: index.ts (API), runtime.ts (main thread), worker.ts, bridge.ts (WebGPU), protocol.ts, types.ts
+src/cuda/       CUDA: compiler/ (preprocess, parser, lower, passes, wgsl, wasm/), runtime/ (webgpu, wasm, remote, context),
+                kernels/ (library), libs/ (cuBLAS/cuDNN/cuRAND subsets), device.ts, api.ts, tinygrad-host.ts
+server/cuda-worker/   remote native CUDA worker (NVRTC + driver API), Docker / Modal / RunPod deployment
 python/tinygrad_js/   webgpu.py (WEBGPU device), cpu.py, patches.py, training.py (run_training), _runner.py, __init__.py (install)
 python/tinygrad_js/_shims/torch/   the PyTorch-compatible API (`import torch`): _tensor.py, nn/, optim/, utils/data, serialization.py
 tests/          Playwright tests, shared Python programs, native CPU reference fixtures, torch_programs/ + PyTorch references
-benchmarks/     bench.py (browser + native), run.mjs, results/
-examples/       vite-demo/, playground/, python/mlp_training.py
+benchmarks/     bench.py (browser + native), run.mjs, cuda.mjs + cuda-bench.js + cuda_tinygrad.py (CUDA), dashboard.html, results/
+examples/       vite-demo/, playground/, cuda-playground/, cuda/, python/
 scripts/        build.mjs, fetch-assets.mjs (sha256-pinned downloads), pins.mjs, serve.mjs
-docs/COMPATIBILITY.md, docs/TORCH.md, RESEARCH.md
+docs/COMPATIBILITY.md, docs/TORCH.md, docs/CUDA.md, RESEARCH.md
 ```
 
 The build is reproducible. Every third-party artifact (tinygrad wheels, Pyodide release) is pinned by URL and SHA-256 in

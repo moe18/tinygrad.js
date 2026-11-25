@@ -267,6 +267,45 @@ __device__ __forceinline__ float curand_log_normal(curandStatePhilox4_32_10_t* s
 #endif
 `;
 
+
+const COOP = `#ifndef _TGJS_COOPERATIVE_GROUPS
+#define _TGJS_COOPERATIVE_GROUPS
+// cooperative groups: thread blocks and warp tiles (grid-wide groups need inter-block synchronization, which is not available)
+namespace cooperative_groups {
+__device__ __forceinline__ unsigned int _cg_linear_tid() { return threadIdx.x + blockDim.x * (threadIdx.y + blockDim.y * threadIdx.z); }
+struct thread_block {
+  __device__ __forceinline__ void sync() const { __syncthreads(); }
+  __device__ __forceinline__ unsigned int thread_rank() const { return _cg_linear_tid(); }
+  __device__ __forceinline__ unsigned int size() const { return blockDim.x * blockDim.y * blockDim.z; }
+  __device__ __forceinline__ unsigned int num_threads() const { return blockDim.x * blockDim.y * blockDim.z; }
+  __device__ __forceinline__ dim3 group_index() const { return blockIdx; }
+  __device__ __forceinline__ dim3 thread_index() const { return threadIdx; }
+  __device__ __forceinline__ dim3 group_dim() const { return blockDim; }
+  __device__ __forceinline__ dim3 dim_threads() const { return blockDim; }
+};
+__device__ __forceinline__ thread_block this_thread_block() { return thread_block(); }
+__device__ __forceinline__ void sync(const thread_block& g) { __syncthreads(); }
+template <unsigned int N> struct thread_block_tile {
+  __device__ __forceinline__ unsigned int thread_rank() const { return _cg_linear_tid() & (N - 1); }
+  __device__ __forceinline__ unsigned int size() const { return N; }
+  __device__ __forceinline__ unsigned int num_threads() const { return N; }
+  __device__ __forceinline__ unsigned int meta_group_rank() const { return _cg_linear_tid() / N; }
+  __device__ __forceinline__ unsigned int meta_group_size() const { return (blockDim.x * blockDim.y * blockDim.z + N - 1) / N; }
+  __device__ __forceinline__ unsigned int _lanes() const { return N == 32 ? 0xffffffffu : (1u << N) - 1u; }
+  __device__ __forceinline__ void sync() const { __syncwarp(); }
+  template <typename T> __device__ __forceinline__ T shfl(T v, int src) const { return __shfl_sync(0xffffffffu, v, src, N); }
+  template <typename T> __device__ __forceinline__ T shfl_down(T v, unsigned int d) const { return __shfl_down_sync(0xffffffffu, v, d, N); }
+  template <typename T> __device__ __forceinline__ T shfl_up(T v, unsigned int d) const { return __shfl_up_sync(0xffffffffu, v, d, N); }
+  template <typename T> __device__ __forceinline__ T shfl_xor(T v, unsigned int m) const { return __shfl_xor_sync(0xffffffffu, v, m, N); }
+  __device__ __forceinline__ unsigned int ballot(int p) const { return (__ballot_sync(0xffffffffu, p) >> ((_cg_linear_tid() & 31u) / N * N)) & _lanes(); }
+  __device__ __forceinline__ int any(int p) const { return ballot(p) != 0u; }
+  __device__ __forceinline__ int all(int p) const { return ballot(p) == _lanes(); }
+};
+template <unsigned int N, typename ParentT> __device__ __forceinline__ thread_block_tile<N> tiled_partition(const ParentT& parent) { return thread_block_tile<N>(); }
+}
+#endif
+`;
+
 export const BUILTIN_HEADERS: Record<string, string> = {
   "cuda_runtime.h": RUNTIME, "cuda_runtime_api.h": RUNTIME, "cuda.h": RUNTIME, "device_launch_parameters.h": "", "device_functions.h": "",
   "cuda_device_runtime_api.h": "", "sm_20_atomic_functions.h": "", "sm_60_atomic_functions.h": "", "crt/host_defines.h": "",
@@ -274,6 +313,7 @@ export const BUILTIN_HEADERS: Record<string, string> = {
   "stdint.h": "", cstdint: "", "stddef.h": "", cstddef: "", "assert.h": "", cassert: "", "stdio.h": "", cstdio: "",
   "cuda_fp16.h": FP16, "cuda_fp16.hpp": FP16, "cuda_bf16.h": BF16, "cuda_bf16.hpp": BF16, "vector_types.h": "", "vector_functions.h": "",
   "curand_kernel.h": CURAND, "curand.h": "", "curand_philox4x32_x.h": CURAND,
+  "cooperative_groups.h": COOP, "cooperative_groups": COOP,
 };
 
 /** headers that only declare host APIs: including them is harmless for device code */

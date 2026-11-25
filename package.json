@@ -53,7 +53,8 @@
     "test": "playwright test",
     "bench": "node benchmarks/run.mjs",
     "serve": "node scripts/serve.mjs",
-    "prepublishOnly": "npm run fetch:assets && npm run build"
+    "prepublishOnly": "npm run fetch:assets && npm run build",
+    "bench:cuda": "node benchmarks/cuda.mjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.63.0",

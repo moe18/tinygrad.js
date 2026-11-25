@@ -207,3 +207,24 @@ test.describe("code generation", () => {
     expect(foldExpr).toBeTruthy();
   });
 });
+
+test.describe("WGSL __syncthreads memory ordering", () => {
+  const sb = (src: string, ref: string, aliasGroups?: number[]) =>
+    (generateWGSL(lower(src, ref, [256, 1, 1]), caps, { aliasGroups }, new DiagnosticSink()).code.match(/storageBarrier\(\)/g) ?? []).length;
+  test("storageBarrier is elided when no thread can observe another thread's global writes across the barrier", () => {
+    // reads only `in`, writes `out` once with a commutative atomic whose result is unused
+    expect(sb(sources.reduction, "reduce_sum<256>", [0, 1, 2])).toBe(0);
+    // a single store outside loops, never read back
+    expect(sb("__global__ void k(const float* a, float* b) { __shared__ float s[256]; s[threadIdx.x] = a[threadIdx.x]; __syncthreads(); b[threadIdx.x] = s[255 - threadIdx.x]; }", "k", [0, 1])).toBe(0);
+  });
+  test("storageBarrier is kept whenever global memory may carry data between threads", () => {
+    const comm = "__global__ void k(float* a, float* b) { a[threadIdx.x] = 1.0f; __syncthreads(); b[threadIdx.x] = a[255 - threadIdx.x]; }";
+    expect(sb(comm, "k", [0, 1])).toBeGreaterThan(0);                                   // written buffer is read back
+    expect(sb("__global__ void k(const float* a, float* b) { b[threadIdx.x] = 1.0f; __syncthreads(); b[threadIdx.x] = a[255 - threadIdx.x]; }", "k", [0, 1])).toBeGreaterThan(0); // two store sites
+    expect(sb("__global__ void k(const float* a, float* b) { for (int i = 0; i < 4; i++) { b[(threadIdx.x + i) & 255] = a[i]; __syncthreads(); } }", "k", [0, 1])).toBeGreaterThan(0); // store in a loop
+    expect(sb("__global__ void k(const float* a, int* c, float* b) { int o = atomicAdd(c, 1); __syncthreads(); b[o & 255] = a[0]; }", "k", [0, 1, 2])).toBeGreaterThan(0); // atomic result used
+    // aliasing: `a` and `b` bound to one buffer, or alias information unavailable
+    expect(sb("__global__ void k(const float* a, float* b) { b[threadIdx.x] = 1.0f; __syncthreads(); b[0] = a[threadIdx.x]; }", "k", [0, 0])).toBeGreaterThan(0);
+    expect(sb(sources.reduction, "reduce_sum<256>")).toBeGreaterThan(0);
+  });
+});

@@ -136,6 +136,8 @@ class CUDAKernel:
         scalars.append(_jsonable(a))
     if not tensors: raise CUDAError("tinygrad.cuda launches need at least one Tensor argument (it decides the device)")
     from tinygrad import Device
+    # remember which arguments view another tensor's data, and what that data is, before any argument is replaced
+    views = [(_is_view(t), t.uop.base.op.name if t.device is not None else "unplaced") for t in tensors]
     for t in tensors:
       # device-less tensors (built from Tensor.arange / constants in tinygrad >= 0.13) live on the default device
       if t.device is None: t.uop = t.clone(Device.DEFAULT).uop
@@ -158,6 +160,14 @@ class CUDAKernel:
     _install_cpu_runtime(dev)
     # views of other tensors' buffers go in as contiguous copies; written ones are stored back with assign
     # kernels see flat buffers: pass 1-D sources (a reshape of a buffer is still the same buffer, no copy)
+    for i in written_slots:
+      t = tensors[i]
+      is_view, base_op = views[i]
+      if is_view and base_op not in _STORAGE:
+        pname = next(params[j]["name"] for j, p in enumerate(params) if p["pointer"] and slot_of[sum(1 for q in params[:j] if q["pointer"])] == i)
+        raise CUDAError(f"{self.name}: argument '{pname}' is a view (slice / transpose / ...) that the kernel writes, but the tensor it views is "
+                        f"not stored in a buffer (it is a lazy {base_op if base_op != 'unplaced' else 'device-less'} computation), so tinygrad cannot write through the view and "
+                        f"the result would be lost. Materialize that tensor first, e.g. x = x.clone().realize(), then pass the view.")
     srcs = [(t.contiguous() if _is_view(t) else t).reshape(-1) for t in tensors]
     outs = Tensor.custom_kernel(*srcs, fxn=fxn)
     written: list[Tensor] = []
@@ -185,13 +195,18 @@ def _jsonable(a):
   except ImportError: pass
   raise CUDAError(f"unsupported scalar argument of type {type(a).__name__}")
 
+_SELECTING = ("SHRINK", "PERMUTE", "PAD", "FLIP")
+_STORAGE = ("BUFFER", "COPY", "AFTER", "ASSIGN", "PARAM", "MSTACK", "MSELECT")  # stored bases tinygrad writes views through
 def _is_view(t) -> bool:
-  """a slice / permute / expand ... of another tensor's buffer; a pure reshape of a whole buffer is the buffer itself"""
-  u = t.uop
-  base = u.base
-  if base is u or base.op.name not in ("BUFFER", "AFTER", "PARAM", "MSTACK", "MSELECT"): return False
-  while u.op.name == "RESHAPE": u = u.src[0]
-  return u is not base
+  """A slice / permute / pad / flip of another tensor's elements, which kernel writes must reach (written back with
+  assign), whether the underlying tensor is a realized buffer or a lazy computation. Pure reshapes and broadcasts
+  (e.g. Tensor.zeros(n), which is an expanded constant) are the tensor itself: its uop is replaced by the result."""
+  u, base = t.uop, t.uop.base
+  while u is not base:
+    if u.op.name in _SELECTING: return True
+    if u.op.name not in ("RESHAPE", "EXPAND"): return False
+    u = u.src[0]
+  return False
 
 # ---------------------------------------------------------------- the device programs
 def webgpu_program_call(prg, bufs, global_size, local_size, wait):

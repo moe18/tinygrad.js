@@ -29,6 +29,23 @@ R["inplace"] = z.numpy().tolist() == [3.0] * 8
 m = Tensor(np.arange(12, dtype=np.float32).reshape(3, 4)).realize()
 scale.launch(1, 32, [m[:, 1], 10.0, 3])
 R["view_writeback"] = m.numpy()[:, 1].tolist() == [10.0, 50.0, 90.0] and m.numpy()[:, 0].tolist() == [0.0, 4.0, 8.0]
+# writes through views of tensors that are computed rather than stored can't reach the base in tinygrad: explicit error
+a = Tensor.arange(8, dtype="float32").reshape(2, 4).contiguous()
+try: scale.launch(1, 32, [a[1], 10.0, 4]); R["lazy_view_write_error"] = False
+except CUDAError as e: R["lazy_view_write_error"] = "argument 'x' is a view" in str(e) and "clone().realize()" in str(e)
+a = a.clone().realize()                       # the documented fix
+scale.launch(1, 32, [a[1], 10.0, 4])
+R["materialized_view_write"] = a.numpy().tolist() == [[0, 1, 2, 3], [40, 50, 60, 70]]
+tt = Tensor(np.arange(12, dtype=np.float32).reshape(3, 4))
+scale.launch(1, 32, [tt.T[1], 2.0, 3])         # a row of the transpose = a strided column
+R["transposed_view_write"] = tt.numpy()[:, 1].tolist() == [2.0, 10.0, 18.0] and tt.numpy()[:, 0].tolist() == [0.0, 4.0, 8.0]
+zz = Tensor.ones(2, 4).contiguous().realize()
+zz = zz + 0                                    # a lazy value: writing through its view is refused, not lost
+try: scale.launch(1, 32, [zz[1], 5.0, 4]); R["lazy_view_write_error2"] = False
+except CUDAError: R["lazy_view_write_error2"] = True
+zz = Tensor.ones(2, 4).clone().realize()
+scale.launch(1, 32, [zz[1], 5.0, 4])
+R["row_view_write"] = zz.numpy().tolist() == [[1.0] * 4, [5.0] * 4]
 # non-contiguous input (transpose) is read correctly
 t = Tensor(np.arange(6, dtype=np.float32).reshape(2, 3))
 y = Tensor.zeros(6).contiguous()

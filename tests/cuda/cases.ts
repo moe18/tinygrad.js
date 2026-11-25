@@ -742,3 +742,53 @@ __global__ void p(int n) {
     return { maxErr: err, tol: 0, info: text };
   },
 });
+
+CASES.push({
+  name: "cooperative groups (thread_block, tiled_partition<32/8> shuffles, ballot), enums, templates returning templated structs",
+  async run(ctx) {
+    const m = ctx.compile(`
+#include <cooperative_groups.h>
+namespace cg = cooperative_groups;
+enum Op { OP_SUM = 1, OP_MAX = 2 };
+template <int N> struct Acc { float v[N]; };
+template <int N> __device__ Acc<N> make_acc(float x) { Acc<N> a; for (int i = 0; i < N; ++i) a.v[i] = x * (i + 1); return a; }
+__global__ void k(const float* in, float* warp_out, float* tile8_out, unsigned* ballots, float* acc_out, Op op) {
+  cg::thread_block block = cg::this_thread_block();
+  auto warp = cg::tiled_partition<32>(block);
+  auto t8 = cg::tiled_partition<8>(block);
+  float x = in[block.thread_rank()];
+  float w = x, e = x;
+  for (int o = warp.size() / 2; o > 0; o /= 2) { float y = warp.shfl_down(w, o); w = op == OP_SUM ? w + y : fmaxf(w, y); }
+  for (int o = 4; o > 0; o /= 2) e += t8.shfl_xor(e, o);
+  if (warp.thread_rank() == 0) warp_out[warp.meta_group_rank()] = w;
+  if (t8.thread_rank() == 0) tile8_out[t8.meta_group_rank()] = e;
+  unsigned b = t8.ballot(x > 0.0f);
+  if (t8.thread_rank() == 0) ballots[t8.meta_group_rank()] = b;
+  block.sync();
+  if (block.thread_rank() == 0) { Acc<3> a = make_acc<3>(2.0f); acc_out[0] = a.v[0]; acc_out[1] = a.v[1]; acc_out[2] = a.v[2]; }
+}`);
+    const n = 128, x = rng(77)(n);
+    const run = async (op: number) => {
+      const wo = ctx.zeros([n / 32]), to = ctx.zeros([n / 8]), bo = ctx.zeros([n / 8], "uint32"), ao = ctx.zeros([3]);
+      await m.launch({ grid: 1, block: n, args: [ctx.tensor(x), wo, to, bo, ao, op] });
+      return [...await f32(wo), ...await f32(to), ...Array.from(await bo.toArray() as Uint32Array), ...await f32(ao)];
+    };
+    const want = (op: number) => {
+      const w = Array.from({ length: n / 32 }, (_, i) => {
+        // shfl_down tree in float order: exact pairwise order matters for sums, so replicate it
+        const v = Array.from(x.slice(i * 32, i * 32 + 32));
+        for (let o = 16; o > 0; o >>= 1) for (let l = 0; l < 32; l++) if (l + o < 32) v[l] = op === 1 ? Math.fround(v[l] + v[l + o]) : Math.max(v[l], v[l + o]);
+        return v[0];
+      });
+      const t = Array.from({ length: n / 8 }, (_, i) => {
+        let v = Array.from(x.slice(i * 8, i * 8 + 8));
+        for (let o = 4; o > 0; o >>= 1) v = v.map((a, l) => Math.fround(a + v[l ^ o]));
+        return v[0];
+      });
+      const b = Array.from({ length: n / 8 }, (_, i) => x.slice(i * 8, i * 8 + 8).reduce((m, v, l) => (v > 0 ? m | (1 << l) : m), 0));
+      return [...w, ...t, ...b, 2, 4, 6];
+    };
+    const [s, mx] = [await run(1), await run(2)];
+    return { maxErr: Math.max(maxRel(s, want(1)), maxRel(mx, want(2))), tol: 1e-6, info: `${s.join(",")}\n${mx.join(",")}` };
+  },
+});

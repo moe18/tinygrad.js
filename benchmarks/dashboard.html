@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CUDA benchmark dashboard</title>
+<style>
+  :root { --bg: #fbfbfa; --fg: #1d1d1b; --muted: #6b6b66; --line: #e3e2de; --card: #fff; --bar: #3d6fd9; --bar2: #8a5cf6; --bar3: #1f9d74; --bar4: #d97a2b; --bad: #c43c3c; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #161615; --fg: #ececea; --muted: #9a9a94; --line: #2e2e2b; --card: #1e1e1c; --bar: #6f97f0; --bar2: #a98bf8; --bar3: #3cc39a; --bar4: #eea05c; --bad: #ef6b6b; } }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 1100px; margin: 0 auto; padding: 24px 16px 64px; }
+  h1 { font-size: 22px; margin: 0 0 4px; } h2 { font-size: 16px; margin: 28px 0 8px; }
+  .muted { color: var(--muted); } select { font: inherit; padding: 4px 8px; background: var(--card); color: var(--fg); border: 1px solid var(--line); border-radius: 6px; }
+  .env { display: grid; grid-template-columns: max-content 1fr; gap: 2px 16px; margin: 12px 0; font-size: 13px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; margin: 10px 0; }
+  .card h3 { margin: 0 0 8px; font-size: 14px; font-weight: 600; }
+  .row { display: grid; grid-template-columns: minmax(120px, 190px) 1fr minmax(70px, max-content); gap: 10px; align-items: center; font-size: 13px; margin: 3px 0; }
+  .track { height: 14px; background: color-mix(in srgb, var(--line) 50%, transparent); border-radius: 3px; overflow: hidden; }
+  .fill { height: 100%; border-radius: 3px; }
+  .num { font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+  .bad { color: var(--bad); font-weight: 600; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; } th, td { padding: 5px 8px; border-bottom: 1px solid var(--line); text-align: left; } td.num { text-align: right; }
+  .scroll { overflow-x: auto; }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; margin-right: 14px; font-size: 12px; } .legend i { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+  @media (max-width: 560px) { .row { grid-template-columns: 1fr minmax(64px, max-content); } .row .track { grid-column: 1 / -1; grid-row: 2; } }
+</style>
+</head>
+<body>
+<main>
+  <h1>CUDA benchmark dashboard</h1>
+  <p class="muted">Results written by <code>npm run bench:cuda</code> to <code>benchmarks/results/</code>. Bars are steady-state time per launch; shorter is faster. Only verified results get a bar.</p>
+  <label>Run: <select id="pick"></select></label>
+  <div id="env" class="env"></div>
+  <div class="legend" id="legend"></div>
+  <div id="kernels"></div>
+  <h2>CUDA kernels on tinygrad tensors vs tinygrad operations</h2>
+  <div id="tinygrad" class="scroll"></div>
+</main>
+<script type="module">
+const COLORS = { "CUDA→WGSL optimized": "var(--bar)", "CUDA→WGSL direct": "var(--bar2)", "handwritten WGSL": "var(--bar3)" };
+const color = (v) => COLORS[v] ?? "var(--bar4)";
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const fmt = (v, d = 2) => (v == null ? "–" : v < 0.1 ? v.toFixed(3) : v.toFixed(d));
+
+async function load(name) {
+  const r = await (await fetch(`results/${name}`)).json();
+  const g = r.env.webgpu;
+  document.getElementById("env").innerHTML = [
+    ["date", r.date.slice(0, 19).replace("T", " ") + (r.quick ? " (quick)" : "")], ["browser", `Chromium ${r.browser}`],
+    ["WebGPU", g ? `${g.name}${g.isFallbackAdapter ? " — software adapter: GPU numbers measure a CPU emulation" : ""}` : `unavailable (${r.env.webgpuError})`],
+    ["CPU", `${r.host.cpu} × ${r.host.cores}; WASM pool ${r.env.cpuPool.threads} threads`],
+  ].map(([k, v]) => `<span class="muted">${k}</span><span>${esc(v)}</span>`).join("");
+  const variants = [...new Set(r.kernels.map((x) => x.variant))];
+  document.getElementById("legend").innerHTML = variants.map((v) => `<span><i style="background:${color(v)}"></i>${esc(v)}</span>`).join("");
+  const byW = new Map();
+  for (const x of r.kernels) byW.set(x.workload, [...(byW.get(x.workload) ?? []), x]);
+  document.getElementById("kernels").innerHTML = [...byW].map(([w, rows]) => {
+    const max = Math.max(...rows.filter((x) => x.ok).map((x) => x.execMs), 1e-9);
+    return `<div class="card"><h3>${esc(w)}</h3>${rows.map((x) => {
+      if (x.error) return `<div class="row"><span>${esc(x.variant)}</span><span class="bad">${esc(x.error.slice(0, 140))}</span><span></span></div>`;
+      if (!x.ok) return `<div class="row"><span>${esc(x.variant)}</span><span class="bad">wrong result (max rel. error ${x.maxRelErr.toExponential(1)})</span><span></span></div>`;
+      const rate = x.flops ? `${(x.flops / x.execMs / 1e6).toFixed(1)} GFLOP/s` : x.bytes ? `${(x.bytes / x.execMs / 1e6).toFixed(1)} GB/s` : "";
+      return `<div class="row" title="latency ${fmt(x.latencyMs)} ms · compile ${fmt(x.compileMs, 1)} ms · upload ${fmt(x.uploadMs)} ms · download ${fmt(x.downloadMs)} ms · gpu ${fmt(x.gpuMs, 3)} ms · max rel err ${x.maxRelErr.toExponential(1)}">
+        <span>${esc(x.variant)}</span><div class="track"><div class="fill" style="width:${Math.max(0.5, (100 * x.execMs) / max)}%;background:${color(x.variant)}"></div></div>
+        <span class="num">${fmt(x.execMs, 2)} ms <span class="muted">${rate}</span></span></div>`;
+    }).join("")}</div>`;
+  }).join("");
+  const t = r.tinygrad;
+  document.getElementById("tinygrad").innerHTML = !t ? `<p class="muted">not measured in this run</p>` :
+    `<table><thead><tr><th>device</th><th>workload</th><th class="num">tinygrad.cuda kernel (ms)</th><th class="num">tinygrad op (ms)</th><th class="num">op / kernel</th></tr></thead><tbody>${
+      t.runs.map((x) => `<tr><td>${esc(x.device)}</td><td>${esc(x.workload)}</td><td class="num">${fmt(x.cuda_ms, 3)}</td><td class="num">${fmt(x.tinygrad_ms, 3)}</td><td class="num">${x.ok ? (x.tinygrad_ms / x.cuda_ms).toFixed(2) + "×" : '<span class="bad">results differ</span>'}</td></tr>`).join("")
+    }</tbody></table><p class="muted">Above 1× the CUDA kernel was faster on this machine; below 1× the tinygrad operation was.</p>`;
+}
+
+const pick = document.getElementById("pick");
+const list = (await (await fetch("results/index.json")).json()).filter((n) => n.startsWith("cuda-")).reverse();
+pick.innerHTML = list.map((n) => `<option>${esc(n)}</option>`).join("");
+const want = new URLSearchParams(location.search).get("run");
+if (want && list.includes(want)) pick.value = want;
+pick.onchange = () => load(pick.value);
+if (list.length) load(pick.value); else document.getElementById("kernels").innerHTML = '<p class="muted">no results yet: run npm run bench:cuda</p>';
+</script>
+</body>
+</html>
