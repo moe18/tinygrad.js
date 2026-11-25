@@ -22,6 +22,7 @@ from urllib.parse import urlsplit, parse_qs
 from . import tokens
 from .errors import WorkerError
 from .protocol import send, recv, ChildTimeout, ChildDied
+from .source import check_includes
 
 HANDLE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
@@ -73,19 +74,31 @@ class Session:
     self.owner, self.cfg = owner, cfg
     self.memory_bytes, self.time_limit_ms = memory_bytes, time_limit_ms
     self.allocs: dict[str, int] = {}
+    self.reserving: set[str] = set()   # handles whose alloc is in flight (their bytes are already counted in `used`)
     self.used = 0
     self.launches = 0
+    # `lock` serializes the pipe to the child (one request at a time) and guards the fds: they are closed only while it is
+    # held, so no request can ever write to or read from an fd number that was closed and reused by another session.
+    # `meta_lock` guards allocs / reserving / used (bookkeeping checked before the child is called, so it cannot be `lock`)
     self.lock = threading.Lock()
+    self.meta_lock = threading.Lock()
+    self._proc_lock = threading.Lock()
     self.last_used = time.monotonic()
     self.dead: WorkerError | None = None
     self._killed = False
+    self._closing = False
+    self._reaped = False
     p2c_r, p2c_w = os.pipe(); c2p_r, c2p_w = os.pipe()
     child_cfg = {"engine": cfg.engine, "printfBytes": cfg.printf_bytes, "runAsUid": cfg.run_as_uid, "runAsGid": cfg.run_as_gid,
                  "cpuSeconds": max(60, cfg.session_ttl_s * 4)}
     env = {k: v for k, v in os.environ.items() if k in ("PATH", "LD_LIBRARY_PATH", "CUDA_HOME", "CUDA_VISIBLE_DEVICES", "TGJS_CUDA_NVRTC", "PYTHONPATH", "LANG", "HOME")}
     env["PYTHONPATH"] = os.pathsep.join([os.path.dirname(os.path.dirname(os.path.abspath(__file__)))] + ([env["PYTHONPATH"]] if env.get("PYTHONPATH") else []))
-    self.proc = subprocess.Popen([sys.executable, "-s", "-m", "tgjs_cuda_worker.child", str(p2c_r), str(c2p_w), json.dumps(child_cfg)],
-                                 pass_fds=(p2c_r, c2p_w), stdin=subprocess.DEVNULL, env=env, start_new_session=True)
+    try:
+      self.proc = subprocess.Popen([sys.executable, "-s", "-m", "tgjs_cuda_worker.child", str(p2c_r), str(c2p_w), json.dumps(child_cfg)],
+                                   pass_fds=(p2c_r, c2p_w), stdin=subprocess.DEVNULL, env=env, start_new_session=True)
+    except BaseException:
+      for fd in (p2c_r, p2c_w, c2p_r, c2p_w): os.close(fd)
+      raise
     os.close(p2c_r); os.close(c2p_w)
     self.wfd, self.rfd = p2c_w, c2p_r
     try: hello, _ = recv(self.rfd, time.monotonic() + cfg.startup_timeout_s)
@@ -105,33 +118,53 @@ class Session:
         reply, body = recv(self.rfd, time.monotonic() + (timeout_ms or self.time_limit_ms) / 1000)
       except ChildTimeout:
         self.dead = WorkerError("cudaErrorLaunchTimeout", f"{header.get('op')} exceeded the time limit of {timeout_ms or self.time_limit_ms} ms; the session was terminated", 408)
-        self.kill(); raise self.dead
+        self._kill_locked(); raise self.dead
       except ChildDied:
-        self.dead = WorkerError("cudaErrorLaunchFailure", "the CUDA session process exited unexpectedly; the session was terminated", 500)
-        self.kill(); raise self.dead
+        # also the path of a request in flight when the session is closed: kill() signals the child, then waits for us
+        if self.dead is None:
+          self.dead = (WorkerError("cudaErrorInvalidResourceHandle", "the session was closed while this request was running", 404) if self._closing
+                       else WorkerError("cudaErrorLaunchFailure", "the CUDA session process exited unexpectedly; the session was terminated", 500))
+        self._kill_locked(); raise self.dead
       if not reply.get("ok"):
         err = reply.get("error", {})
         e = WorkerError(err.get("name", "cudaErrorUnknown"), err.get("message", "error"), int(reply.get("status", 500)))
         if reply.get("sticky"):
           self.dead = WorkerError(e.name, f"{e.message} (the CUDA context is no longer usable; the session was terminated)", 410)
-          self.kill()
+          self._kill_locked()
         e.printf = reply.get("printf", "")  # type: ignore[attr-defined]
         raise e
       return reply, body
 
-  def kill(self) -> None:
+  def _signal(self) -> None:
+    """SIGKILL the child's process group (start_new_session: nothing it started survives). It touches no fds, so it is
+    safe without `lock`: a request blocked on the child then sees it die and returns, releasing the lock."""
+    with self._proc_lock:
+      # never signal a pid that was reaped (by wait or poll): it may belong to another process by now
+      if self._reaped or self.proc.returncode is not None: return
+      try: os.killpg(self.proc.pid, signal.SIGKILL)
+      except (ProcessLookupError, PermissionError):
+        try: self.proc.kill()
+        except Exception: pass
+
+  def _kill_locked(self) -> None:
+    """Kill the child and close the fds. The caller holds `lock`."""
     if self._killed: return  # file descriptors must be closed exactly once (their numbers are reused)
     self._killed = True
-    # the child leads its own process group (start_new_session): kill the group, so nothing it started survives
-    try: os.killpg(self.proc.pid, signal.SIGKILL)
-    except (ProcessLookupError, PermissionError):
-      try: self.proc.kill()
-      except Exception: pass
+    if self.dead is None: self.dead = WorkerError("cudaErrorInvalidResourceHandle", "no such session (expired or closed)", 404)
+    self._signal()
     for fd in (self.wfd, self.rfd):
       try: os.close(fd)
       except OSError: pass
-    try: self.proc.wait(5)
+    try:
+      self.proc.wait(5)
+      with self._proc_lock: self._reaped = True
     except Exception: pass
+
+  def kill(self) -> None:
+    if self._killed: return
+    self._closing = True
+    self._signal()  # first, so an operation in flight ends now instead of at its time limit
+    with self.lock: self._kill_locked()
 
   def close(self) -> None:
     if self.proc.poll() is None and not self.dead:
@@ -196,16 +229,27 @@ class Gateway:
     s = self.get(claims, sid)
     if action == "alloc":
       h, n = _handle(body.get("handle")), _int(body.get("bytes"), "bytes", 0)
-      if h in s.allocs: raise WorkerError("cudaErrorInvalidValue", f"allocation {h!r} exists")
-      if s.used + n > s.memory_bytes: raise WorkerError("cudaErrorMemoryAllocation", f"allocating {n} bytes exceeds the session memory limit of {s.memory_bytes} bytes ({s.used} in use)", 413)
-      s.call({"op": "alloc", "handle": h, "bytes": n})
-      s.allocs[h] = n; s.used += n
+      # check and reserve in one step: concurrent allocs must not all pass the check before any of them is counted
+      with s.meta_lock:
+        if h in s.allocs or h in s.reserving: raise WorkerError("cudaErrorInvalidValue", f"allocation {h!r} exists")
+        if s.used + n > s.memory_bytes: raise WorkerError("cudaErrorMemoryAllocation", f"allocating {n} bytes exceeds the session memory limit of {s.memory_bytes} bytes ({s.used} in use)", 413)
+        s.used += n; s.reserving.add(h)
+      try: s.call({"op": "alloc", "handle": h, "bytes": n})
+      except BaseException:
+        with s.meta_lock: s.used -= n; s.reserving.discard(h)
+        raise
+      with s.meta_lock: s.reserving.discard(h); s.allocs[h] = n
       return {}, 200
     if action == "free":
       h = _handle(body.get("handle"))
-      if h not in s.allocs: raise WorkerError("cudaErrorInvalidDevicePointer", f"unknown allocation {h!r}")
-      s.call({"op": "free", "handle": h})
-      s.used -= s.allocs.pop(h)
+      with s.meta_lock:  # take it out first, so a second concurrent free of the same handle is refused
+        if h not in s.allocs: raise WorkerError("cudaErrorInvalidDevicePointer", f"unknown allocation {h!r}")
+        n = s.allocs.pop(h)
+      try: s.call({"op": "free", "handle": h})
+      except BaseException:
+        with s.meta_lock: s.allocs[h] = n
+        raise
+      with s.meta_lock: s.used -= n
       return {}, 200
     if action == "mem_put":
       h, off = _handle(query.get("handle")), _int(query.get("offset", 0), "offset", 0)
@@ -235,6 +279,7 @@ class Gateway:
     src, kernel = b.get("source"), b.get("kernel")
     if not isinstance(src, str) or not src: raise WorkerError("cudaErrorInvalidSource", "missing kernel source")
     if len(src.encode()) > self.cfg.max_source_bytes: raise WorkerError("cudaErrorInvalidSource", f"kernel source exceeds {self.cfg.max_source_bytes} bytes", 413)
+    check_includes(src)  # NVRTC would open any file an #include names and quote it in the compile log
     if not isinstance(kernel, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_:<>, ()*&+\-.]{0,255}", kernel): raise WorkerError("cudaErrorInvalidValue", "invalid kernel name")
     grid, block = _dims(b.get("grid"), "grid", 2**31 - 1), _dims(b.get("block"), "block", 1024)
     if block[0] * block[1] * block[2] > 1024: raise WorkerError("cudaErrorInvalidConfiguration", "more than 1024 threads per block")
@@ -324,22 +369,38 @@ def make_handler(gw: Gateway):
       self.end_headers()
 
     def _body(self) -> bytes:
-      n = int(self.headers.get("Content-Length") or 0)
-      if n > cfg.max_body_bytes:
+      if self.headers.get("Transfer-Encoding"):
+        raise WorkerError("cudaErrorInvalidValue", "chunked request bodies are not supported; send Content-Length", 411)
+      cl = (self.headers.get("Content-Length") or "0").strip()
+      # digits only: int() accepts "-1" (and rfile.read(-1) reads until the client closes, past the limit), "+5", " 5_0"
+      if not (cl.isascii() and cl.isdigit()): raise WorkerError("cudaErrorInvalidValue", "invalid Content-Length", 400)
+      n = int(cl)
+      if n > cfg.max_body_bytes: raise WorkerError("cudaErrorMemoryAllocation", f"request body exceeds {cfg.max_body_bytes} bytes", 413)
+      data = self.rfile.read(n) if n else b""
+      self._body_read = True
+      if len(data) != n:
         self.close_connection = True
-        raise WorkerError("cudaErrorMemoryAllocation", f"request body exceeds {cfg.max_body_bytes} bytes", 413)
-      return self.rfile.read(n) if n else b""
+        raise WorkerError("cudaErrorInvalidValue", "request body ended early", 400)
+      return data
+
+    def _unread_body(self) -> None:
+      # a request refused before its body was read leaves those bytes on the connection: they must not be parsed as the
+      # next request, so the connection is closed after the error reply (a request without a body can keep it)
+      if not self._body_read and ((self.headers.get("Content-Length") or "0").strip() != "0" or self.headers.get("Transfer-Encoding")):
+        self.close_connection = True
 
     def _handle(self, method: str):
+      self._body_read = False
       try:
         if not self._cors(): raise WorkerError("cudaErrorInitializationError", "origin not allowed", 403)
         u = urlsplit(self.path)
         q = {k: v[0] for k, v in parse_qs(u.query).items()}
-        raw = self._body()
         if method == "GET" and u.path == "/v1/health":
+          self._unread_body()
           with gw.lock: n = len(gw.sessions)
           return self._send(200, {"ok": True, "sessions": n, "maxSessions": cfg.max_sessions})
-        claims = gw.auth(self.headers.get("Authorization"))
+        claims = gw.auth(self.headers.get("Authorization"))  # before the body is read: nothing is buffered for unauthenticated clients
+        raw = self._body()
         body = None
         if method == "POST":
           try: body = json.loads(raw or b"{}")
@@ -358,8 +419,10 @@ def make_handler(gw: Gateway):
             return self._send(st, out)
         raise WorkerError("cudaErrorInvalidValue", f"no route for {method} {u.path}", 404)
       except WorkerError as e:
+        self._unread_body()
         self._send(e.status, e.to_json())
       except Exception as e:  # never leak a traceback to clients
+        self._unread_body()
         sys.stderr.write(f"internal error: {type(e).__name__}: {e}\n")
         self._send(500, {"error": {"name": "cudaErrorUnknown", "message": "internal worker error"}})
 

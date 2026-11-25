@@ -29,10 +29,13 @@ export interface WasmBackendOptions {
 
 interface WasmExe extends Executable { prog: WasmProgram; module: WebAssembly.Module; id: number }
 
-interface PoolWorker { post(m: unknown, transfer?: unknown[]): void; terminate(): void; sent: Set<number>; onDone: ((m: DoneMsg) => void) | null }
-interface DoneMsg { type: "done"; job: number; printf?: string[]; fault?: KernelFault; error?: { message: string }; ms?: number }
+/** `failed` is set once the worker can no longer run anything (its script failed to load, it crashed or exited) */
+interface PoolWorker { post(m: unknown, transfer?: unknown[]): void; terminate(): void; sent: Set<number>; onDone: ((m: DoneMsg) => void) | null; failed: string | null }
+/** job -1: the worker itself failed (not one kernel run); every waiter treats it as its own answer */
+interface DoneMsg { type: "done" | "ready"; job: number; printf?: string[]; fault?: KernelFault; error?: { message: string }; ms?: number }
 
 let nextId = 1;
+const WORKER_START_MS = 30_000;
 
 export class WasmBackend implements Backend {
   readonly kind = "wasm" as const;
@@ -222,13 +225,23 @@ export class WasmBackend implements Backend {
       for (let i = 0; i < this.threads; i++) {
         const w = await spawnWorker(url);
         this.workers.push(w);
-        ready.push(new Promise<void>((res) => { w.onDone = () => res(); }));
+        // a worker whose script fails to load (404, a content security policy, a syntax error) answers with an error, or
+        // never answers at all: both must end in the fallback, not in a launch that waits forever
+        ready.push(new Promise<void>((res, rej) => {
+          const timer = setTimeout(() => rej(new Error(`worker did not start within ${WORKER_START_MS / 1000} s`)), WORKER_START_MS);
+          w.onDone = (m) => {
+            clearTimeout(timer);
+            if (m.type === "ready") res(); else rej(new Error(m.error?.message ?? "worker failed to start"));
+          };
+        }));
         w.post({ type: "init", memory: this.memory, index: i });
       }
       await Promise.all(ready);
       for (const w of this.workers) w.onDone = null;
     })().catch((e) => {
       // fall back to running on this thread
+      for (const w of this.workers) w.terminate();
+      this.workers = [];
       this.threads = 0;
       this.infoCache.notes.push(`worker pool unavailable (${(e as Error).message}); running kernels on the calling thread`);
       this.infoCache.threads = 1;
@@ -294,7 +307,8 @@ export class WasmBackend implements Backend {
       } else {
         const job = ++this.job;
         const results = await Promise.all(this.workers.map((w, i) => new Promise<DoneMsg>((res) => {
-          w.onDone = (m) => { if (m.job === job) { w.onDone = null; res(m); } };
+          if (w.failed) { res({ type: "done", job, error: { message: w.failed } }); return; }
+          w.onDone = (m) => { if (m.job === job || m.job === -1) { w.onDone = null; res(m); } };
           const first = !w.sent.has(exe.id);
           w.sent.add(exe.id);
           w.post({ type: "run", job, id: exe.id, module: first ? exe.module : undefined, printf: first ? prog.printf : undefined, args: argsAddr, scratch: this.scratch!.addr + i * per });
@@ -355,9 +369,10 @@ async function spawnWorker(url: string | URL): Promise<PoolWorker> {
   const sent = new Set<number>();
   if (typeof Worker !== "undefined" && !isNode()) {
     const w = new Worker(url, { type: "module", name: "tinygrad.js-cuda-cpu" });
-    const pw: PoolWorker = { post: (m) => w.postMessage(m), terminate: () => w.terminate(), sent, onDone: null };
+    const pw: PoolWorker = { post: (m) => w.postMessage(m), terminate: () => w.terminate(), sent, onDone: null, failed: null };
     w.onmessage = (ev) => pw.onDone?.(ev.data);
-    w.onerror = (ev) => { ev.preventDefault?.(); pw.onDone?.({ type: "done", job: -1, error: { message: ev.message || "worker failed to load" } }); };
+    w.onerror = (ev) => { ev.preventDefault?.(); fail(pw, ev.message || "the CPU worker failed to load"); };
+    w.onmessageerror = () => fail(pw, "the CPU worker could not receive a message");
     return pw;
   }
   interface NodeWorkerLike { postMessage(m: unknown): void; terminate(): unknown; on(ev: string, f: (x: never) => void): void }
@@ -365,8 +380,14 @@ async function spawnWorker(url: string | URL): Promise<PoolWorker> {
   const { Worker: NodeWorker } = await import(/* webpackIgnore: true */ /* @vite-ignore */ NODE_WT) as { Worker: new (u: string | URL) => NodeWorkerLike };
   const path = typeof url === "string" ? url : url.protocol === "file:" ? new URL(url) : url.href;
   const w = new NodeWorker(path as string | URL);
-  const pw: PoolWorker = { post: (m) => w.postMessage(m), terminate: () => void w.terminate(), sent, onDone: null };
+  const pw: PoolWorker = { post: (m) => w.postMessage(m), terminate: () => void w.terminate(), sent, onDone: null, failed: null };
   w.on("message", (m: DoneMsg) => pw.onDone?.(m));
-  w.on("error", (e: Error) => pw.onDone?.({ type: "done", job: -1, error: { message: e.message } }));
+  w.on("error", (e: Error) => fail(pw, e.message));
+  w.on("exit", (code: number) => fail(pw, `the CPU worker exited (code ${code})`));
   return pw;
+}
+
+function fail(pw: PoolWorker, message: string): void {
+  pw.failed ??= message;
+  pw.onDone?.({ type: "done", job: -1, error: { message } });
 }

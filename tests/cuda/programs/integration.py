@@ -7,6 +7,9 @@ src = r"""
 __global__ void scale(float* x, float s, int n) { int i = blockIdx.x * blockDim.x + threadIdx.x; if (i < n) x[i] *= s; }
 __global__ void axpy(const float* x, float* y, float a, int n) { int i = blockIdx.x * blockDim.x + threadIdx.x; if (i < n) y[i] += a * x[i]; }
 __global__ void add_alias(const float* a, float* b, int n) { int i = threadIdx.x; if (i < n) b[i] = a[i] + 1.0f; }
+// observes aliasing: with a == b the write to b[0] is seen through a[0] (separate copies would give a[1] = 2)
+__global__ void alias_rw(float* a, float* b) { if (threadIdx.x == 0) { b[0] = 5.0f; a[1] = a[0] * 2.0f; } }
+__global__ void fill(float* o, float v, int n) { int i = threadIdx.x; if (i < n) o[i] = v; }
 __global__ void iota(int* o, int n) { int i = blockIdx.x * blockDim.x + threadIdx.x; if (i < n) o[i] = i * i - 3; }
 template <int B> __global__ void rowsum(const float* x, float* out, int cols) {
   __shared__ float s[B];
@@ -55,6 +58,21 @@ R["noncontig_input"] = y.numpy().tolist() == (2 * np.arange(6, dtype=np.float32)
 w = Tensor([1.0, 2.0, 3.0]).contiguous().realize()
 alias.launch(1, 32, [w, w, 3])
 R["aliased_args"] = w.numpy().tolist() == [2.0, 3.0, 4.0]
+w2 = Tensor([1.0, 1.0, 1.0]).contiguous().realize()
+K["alias_rw"].launch(1, 1, [w2, w2])
+R["aliased_args_one_buffer"] = w2.numpy().tolist() == [5.0, 10.0, 1.0]
+# scalars JSON cannot hold: inf, -inf, NaN (also numpy scalars)
+fl = Tensor.zeros(1).contiguous().realize()
+vals = []
+for v in (float("inf"), float("-inf"), float("nan"), np.float32("inf")):
+  K["fill"].launch(1, 1, [fl, v, 1]); vals.append(float(fl.numpy()[0]))
+R["nonfinite_scalars"] = vals[0] == float("inf") and vals[1] == float("-inf") and vals[2] != vals[2] and vals[3] == float("inf")
+# calling a kernel directly defaults to the context's laziness (deferred inside CUDAFunction.backward), like .launch()
+import inspect
+R["call_lazy_default"] = inspect.signature(CUDAKernel.__call__).parameters["lazy"].default is None
+cz = Tensor.ones(4).contiguous().realize()
+scale(cz, 4.0, 4, grid=1, block=32)
+R["direct_call"] = cz.numpy().tolist() == [4.0] * 4
 # integer tensors
 o = Tensor.zeros(10, dtype=dtypes.int32).contiguous()
 iota.launch(1, 32, [o, 10])

@@ -24,10 +24,20 @@ browser (tinygrad.js)  --HTTPS + session token-->  gateway (this server)  --pipe
   - It has resource limits (no core dumps, file and descriptor limits, a CPU-time cap).
   - When `TGJS_CUDA_RUN_AS_UID` is set and the gateway runs as root, it drops to that uid.
   - New device allocations are zeroed, so data from earlier sessions on the GPU can't be read.
+  - A session's pipe file descriptors are closed only while no request is using them. Their numbers get reused by the
+    next session, so a request still in flight must never reach another session's process.
+- **Kernel source can't read host files.** NVRTC's preprocessor opens whatever an `#include` names and quotes it in its
+  error log, so `#include "/proc/<gateway pid>/environ"` would return `TGJS_CUDA_TOKEN_SECRET` in a compile error. The
+  worker (`tgjs_cuda_worker/source.py`) only accepts headers by plain relative name, such as `#include <cuda_fp16.h>`.
+  It refuses absolute paths, `..`, and names computed by macros. Also set `TGJS_CUDA_RUN_AS_UID`: a session process with
+  another uid can't read the gateway's `/proc/<pid>/environ` at all.
 
   For untrusted users, also run the worker inside a container sandbox (for example gVisor with `--nvproxy`, or a
   dedicated VM) and on GPUs that host nothing else.
-- **Limits.** Each session gets a memory limit and a per-launch (and per-memory-operation) time limit. A kernel that
+- **Requests are parsed strictly.** The token is checked before the body is read, so nothing is buffered for
+  unauthenticated clients. `Content-Length` must be plain digits: `-1` used to slip past the size limit and read without
+  a limit. Chunked bodies are refused.
+- **Limits.** Each session gets a memory limit, which is reserved atomically, so concurrent allocations can't overshoot it. There is also a per-launch (and per-memory-operation) time limit. A kernel that
   exceeds the time limit has its session process killed (`cudaErrorLaunchTimeout`). The worker also caps:
   - the number of sessions, and per-user session limits through the `maxSessions` token claim
   - source size, launches per session and request size
@@ -113,3 +123,12 @@ kill, sticky faults, session ownership and validation. Test machines have no NVI
 **test-only** engine (`tests/cuda/remote/wasm_engine.py`) that runs the kernels with tinygrad.js's WebAssembly backend.
 `tgjs_cuda_worker/cuda.py`, the NVRTC and driver-API engine, can only run on NVIDIA hardware. Validate it there with
 `python3 -m tgjs_cuda_worker probe` and the same tests, run against it: `TGJS_CUDA_TEST_NATIVE=1 npx playwright test --project=cuda-node tests/cuda/remote.node.test.ts`.
+
+`tests/test_gateway.py` needs no GPU and no Node. It uses a host-memory stub engine and covers:
+- request parsing before authentication
+- the memory quota under concurrent requests
+- closing a session while a request is in flight
+- the `#include` check
+
+Run it on Linux or WSL (session processes use `pass_fds`, which Windows lacks): `cd server/cuda-worker && python3 -m unittest discover -s tests -v`.
+With `TGJS_CUDA_TEST_NATIVE=1` it also checks the include guard against the real NVRTC engine.

@@ -117,17 +117,18 @@ export class TinygradCudaHost {
   async launchWebGPU(mid: number, ref: string, gridJSON: string, blockJSON: string, smem: number, handles: number[] | { toJs(): number[] }, argsJSON: string): Promise<void> {
     const hs = Array.isArray(handles) ? handles : handles.toJs();
     const m = this.module(mid, "webgpu");
-    const args = this.buildArgs(m, ref, JSON.parse(argsJSON), hs.map((h) => this.ptrFor(Number(h))));
+    const args = this.buildArgs(m, ref, parseScalarArgs(argsJSON), hs.map((h) => this.ptrFor(Number(h))));
     await m.getFunction(ref).launch({ grid: JSON.parse(gridJSON), block: JSON.parse(blockJSON), sharedMem: smem, args });
   }
 
-  /** Launch on CPU-device tensors: copies each buffer (memoryview proxies) in, runs the kernel, copies written ones back. */
   /**
    * Runs a kernel on the CPU backend over tinygrad buffers. Inputs are read through the buffer protocol; written
    * buffers are returned (in order) and copied back by the Python side, because Pyodide's getBuffer() may hand out a
    * temporary copy (e.g. for memoryviews of numpy-backed storage), in which case writes through it would be lost.
+   * `bufs` holds each distinct buffer once; `ptrIndexJSON` maps each pointer parameter to its buffer, so a tensor passed
+   * twice is one device allocation (aliased pointers, as on WebGPU and in CUDA). Without it, buffer i is parameter i.
    */
-  async launchCPU(mid: number, ref: string, gridJSON: string, blockJSON: string, smem: number, bufs: PyBufferProxy[] | { toJs(o?: unknown): PyBufferProxy[] }, writtenJSON: string, argsJSON: string): Promise<Uint8Array[]> {
+  async launchCPU(mid: number, ref: string, gridJSON: string, blockJSON: string, smem: number, bufs: PyBufferProxy[] | { toJs(o?: unknown): PyBufferProxy[] }, writtenJSON: string, argsJSON: string, ptrIndexJSON?: string): Promise<Uint8Array[]> {
     const proxies = Array.isArray(bufs) ? bufs : bufs.toJs({ depth: 1 });
     const ctx = this.ctx("cpu");
     const written = JSON.parse(writtenJSON) as boolean[];
@@ -144,7 +145,8 @@ export class TinygradCudaHost {
         } finally { b.release(); }
       }
       const m = this.module(mid, "cpu");
-      const args = this.buildArgs(m, ref, JSON.parse(argsJSON), ptrs);
+      const index = ptrIndexJSON ? (JSON.parse(ptrIndexJSON) as number[]) : ptrs.map((_, i) => i);
+      const args = this.buildArgs(m, ref, parseScalarArgs(argsJSON), index.map((i) => ptrs[i]));
       await m.getFunction(ref).launch({ grid: JSON.parse(gridJSON), block: JSON.parse(blockJSON), sharedMem: smem, args });
       const out: Uint8Array[] = [];
       for (let i = 0; i < ptrs.length; i++) if (written[i]) out.push(await ctx.backend.download(ptrs[i], sizes[i]));
@@ -189,6 +191,15 @@ export class TinygradCudaHost {
     if (e instanceof CudaError) return e.message;
     return e instanceof Error ? e.message : String(e);
   }
+}
+
+/** Scalar kernel arguments from Python: JSON, with inf / NaN tagged as {"$f": "inf" | "-inf" | "nan"} (JSON has neither) */
+export function parseScalarArgs(json: string): unknown[] {
+  return JSON.parse(json, (_k, v) => {
+    if (v && typeof v === "object" && !Array.isArray(v) && Object.keys(v).length === 1 && typeof v.$f === "string")
+      return v.$f === "nan" ? NaN : v.$f === "-inf" ? -Infinity : v.$f === "inf" ? Infinity : v;
+    return v;
+  }) as unknown[];
 }
 
 function exprsOf(s: unknown): unknown[] {

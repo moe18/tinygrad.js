@@ -6,6 +6,7 @@ up with NVRTC name expressions, so template instantiations ("reduce<256>") and C
 from __future__ import annotations
 import ctypes, ctypes.util, hashlib, os
 from .errors import WorkerError, CU_TO_CUDA, STICKY
+from .source import check_includes
 
 def _load(names: list[str]) -> ctypes.CDLL:
   errs = []
@@ -104,6 +105,7 @@ class CudaEngine:
 
   # ------------------------------------------------------------------ compilation
   def _compile(self, source: str, kernel: str, options: dict) -> ctypes.c_void_p:
+    check_includes(source)  # also checked by the gateway; here too, for engines driven some other way
     major, minor = self._attr("major"), self._attr("minor")
     opts = [f"--gpu-architecture=sm_{major}{minor}", "-std=c++17", "-default-device", "-DTINYGRAD_JS_REMOTE=1"]
     for k, v in (options.get("defines") or {}).items():

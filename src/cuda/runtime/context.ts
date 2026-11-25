@@ -346,6 +346,8 @@ export class CudaModule {
 export class CudaFunction {
   private irCache = new Map<string, Kernel>();
   private exeCache = new Map<string, Promise<Executable>>();
+  /** the irCache key each instantiated kernel came from: block size AND dynamic shared size, both baked into the code */
+  private irKeys = new WeakMap<Kernel, string>();
   readonly signature: KernelSignature;
   launches = 0;
 
@@ -364,13 +366,20 @@ export class CudaFunction {
     if (!k) {
       k = this.module.parsed.instantiate(this.ref, { block, dynamicShared: sharedMem }, { mode: this.module.options.mode });
       this.irCache.set(key, k);
+      this.irKeys.set(k, key);
     }
     return k;
   }
 
   /** @internal */
+  exeKey(k: Kernel, spec: ReturnType<Backend["specKey"]>): string {
+    // the dynamic shared size sizes the extern __shared__ array in the generated code, so it must be part of the key
+    return `${this.irKeys.get(k) ?? `${k.block.join("x")}/?`}/${this.module.hash}/${spec.key}`;
+  }
+
+  /** @internal */
   executable(k: Kernel, spec: ReturnType<Backend["specKey"]>): Promise<Executable> {
-    const key = `${k.block.join("x")}/${this.module.hash}/${spec.key}`;
+    const key = this.exeKey(k, spec);
     let p = this.exeCache.get(key);
     if (!p) {
       const sink = new DiagnosticSink();
@@ -409,8 +418,7 @@ export class CudaFunction {
     const transfers: { host: HostArray; ptr: DevicePtr; writeBack: boolean }[] = [];
     const args = resolveArgs(ctx, k, sig, params.args, transfers);
     const spec = ctx.backend.specKey(args);
-    const key = `${k.block.join("x")}/${this.module.hash}/${spec.key}`;
-    const had = (this as unknown as { exeCache: Map<string, unknown> }).exeCache.has(key);
+    const had = this.exeCache.has(this.exeKey(k, spec));
     const exe = await this.executable(k, spec);
     compiled = !had;
     const compileMs = compiled ? performance.now() - t0 : 0;

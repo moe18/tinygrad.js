@@ -107,6 +107,38 @@ test.describe("kernel library on WebGPU", () => {
     });
     expect(r).toEqual([20, 24, 28, 32, 10, 12, 14, 16]);
   });
+  test("unaligned uploads are ordered with later launches and writes", async () => {
+    const r = await page.evaluate(async () => {
+      const w = window as unknown as W;
+      const ctx = w.ctx;
+      const m = ctx.compile("__global__ void k(const unsigned char* a, int* o, int n) { int i = threadIdx.x; if (i < n) o[i] = a[i]; }");
+      const p = ctx.malloc(16), o = ctx.malloc(64);
+      ctx.memset(p, 0, 16);
+      await ctx.memcpy(p.add(1), new Uint8Array([7, 8, 9]));     // 3 bytes at offset 1: both edges of one word
+      await m.launch({ grid: 1, block: 16, args: [p, o, 16] });    // must see the upload
+      const first = new Int32Array(16); await ctx.memcpy(first, o);
+      await ctx.memcpy(p.add(3), new Uint8Array([1, 2, 3, 4, 5, 6])); // spans two partial words and one whole word
+      await ctx.memcpy(p.add(4), new Uint8Array([40, 41, 42, 43]));  // a later aligned write over part of it wins
+      await m.launch({ grid: 1, block: 16, args: [p, o, 16] });
+      const second = new Int32Array(16); await ctx.memcpy(second, o);
+      return { first: Array.from(first).slice(0, 6), second: Array.from(second).slice(0, 12) };
+    });
+    expect(r.first).toEqual([0, 7, 8, 9, 0, 0]);
+    expect(r.second).toEqual([0, 7, 8, 1, 40, 41, 42, 43, 6, 0, 0, 0]);
+  });
+  test("the dynamic shared size is part of the compiled kernel on WebGPU", async () => {
+    const r = await page.evaluate(async (src) => {
+      const w = window as unknown as W;
+      const ctx = w.ctx;
+      const m = ctx.compile(src);
+      const o = ctx.zeros([1]);
+      await m.launch({ grid: 1, block: 32, sharedMem: 16, args: [o, 4] });
+      const a = (await o.toArray())[0];
+      await m.launch({ grid: 1, block: 32, sharedMem: 4096, args: [o, 1024] });
+      return [a, (await o.toArray())[0]];
+    }, "extern __shared__ float s[];\n__global__ void k(float* o, int n) {\n  for (int i = threadIdx.x; i < n; i += blockDim.x) s[i] = (float)i;\n  __syncthreads();\n  if (threadIdx.x == 0) { float t = 0.0f; for (int i = 0; i < n; i++) t += s[i]; o[0] = t; }\n}");
+    expect(r).toEqual([6, (1023 * 1024) / 2]);
+  });
   test("GPU timestamps time kernels when the adapter supports timestamp-query", async () => {
     const r = await page.evaluate(async () => {
       const w = window as unknown as W;

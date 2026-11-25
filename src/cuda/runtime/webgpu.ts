@@ -227,34 +227,60 @@ export class WebGPUBackend implements Backend {
     this.check();
     this.tracker.validate(dst, data.byteLength, "cudaMemcpy (host to device)");
     const buf = dst.alloc.native as GPUBuffer;
-    // WebGPU copies must be 4-byte aligned in offset and size: read-modify-write the edges if needed
+    // WebGPU copies must be 4-byte aligned in offset and size. The aligned middle is written directly; the partial words at
+    // the edges are merged on the GPU by a one-thread-per-word dispatch, recorded in queue order like any launch, so a
+    // later launch, copy or write always sees this upload (a CPU read-modify-write would land after them)
     const start = dst.offset, end = dst.offset + data.byteLength;
+    if (data.byteLength === 0) return;
     if (start % 4 === 0 && data.byteLength % 4 === 0) { this.queue.writeBuffer(buf, start, data); return; }
-    const a0 = start & ~3, a1 = Math.min((end + 3) & ~3, buf.size);
-    void this.unalignedUpload(buf, a0, a1, start, data);
+    const i0 = (start + 3) & ~3, i1 = end & ~3;  // aligned interior [i0, i1)
+    if (i1 > i0) this.queue.writeBuffer(buf, i0, data.subarray(i0 - start, i1 - start));
+    const words = new Set<number>([start >> 2, (end - 1) >> 2]);
+    for (const w of [...words]) if (w * 4 >= i0 && w * 4 + 4 <= i1) words.delete(w);
+    const edits: number[] = [];
+    for (const w of words) {
+      let mask = 0, value = 0;
+      for (let b = 0; b < 4; b++) {
+        const at = w * 4 + b;
+        if (at >= start && at < end) { mask |= 0xff << (8 * b); value |= data[at - start] << (8 * b); }
+      }
+      edits.push(w, mask >>> 0, value >>> 0, 0);
+    }
+    this.mergeWords(buf, edits);
   }
-  private pendingEdits: Promise<void> = Promise.resolve();
-  private unalignedUpload(buf: GPUBuffer, a0: number, a1: number, start: number, data: Uint8Array): Promise<void> {
-    // ordering: a staging copy of the edge words is made now, merged on the CPU and written back in order
-    const tmp = this.device.createBuffer({ size: a1 - a0, usage: MAP_READ | COPY_DST });
-    this.queue.encode((enc) => enc.copyBufferToBuffer(buf, a0, tmp, 0, a1 - a0));
-    this.queue.flush();
-    const copy = new Uint8Array(data);
-    const p = this.pendingEdits.then(async () => {
-      await tmp.mapAsync(MAP_READ);
-      const merged = new Uint8Array(tmp.getMappedRange().slice(0));
-      tmp.unmap(); tmp.destroy();
-      merged.set(copy, start - a0);
-      this.device.queue.writeBuffer(buf, a0, merged);
+
+  private mergePipeline: GPUComputePipeline | null = null;
+  /** dst word = (dst & ~mask) | (value & mask) for each (word, mask, value, _) quadruple, in queue order */
+  private mergeWords(buf: GPUBuffer, edits: number[]): void {
+    const n = edits.length / 4;
+    const lo = Math.min(...edits.filter((_, i) => i % 4 === 0)), hi = Math.max(...edits.filter((_, i) => i % 4 === 0));
+    // bind a small window of the buffer: binding offsets must be aligned, and a whole buffer may exceed the binding limit
+    const align = this.device.limits.minStorageBufferOffsetAlignment;
+    const base = Math.floor((lo * 4) / align) * align;
+    const size = Math.min(buf.size - base, hi * 4 + 4 - base);
+    this.mergePipeline ??= this.device.createComputePipeline({
+      layout: "auto", label: "unaligned upload",
+      compute: { entryPoint: "main", module: this.device.createShaderModule({ label: "unaligned upload", code: `
+@group(0) @binding(0) var<storage, read_write> dst: array<u32>;
+@group(0) @binding(1) var<storage, read> e: array<vec4<u32>>;
+@compute @workgroup_size(1) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+  let x = e[id.x];
+  dst[x.x] = (dst[x.x] & ~x.y) | (x.z & x.y);
+}` }) },
     });
-    this.pendingEdits = p.catch(() => {});
-    return p;
+    const list = this.device.createBuffer({ size: edits.length * 4, usage: STORAGE, mappedAtCreation: true, label: "unaligned upload edits" });
+    const rel = edits.map((v, i) => (i % 4 === 0 ? v - base / 4 : v));
+    new Uint32Array(list.getMappedRange()).set(rel);
+    list.unmap();
+    const bg = this.device.createBindGroup({ layout: this.mergePipeline.getBindGroupLayout(0), entries: [
+      { binding: 0, resource: { buffer: buf, offset: base, size } }, { binding: 1, resource: { buffer: list } }] });
+    this.queue.dispatch(this.mergePipeline, bg, n, 1, 1);
+    this.queue.deferDestroy(list);
   }
 
   async download(src: DevicePtr, bytes: number): Promise<Uint8Array> {
     this.check();
     this.tracker.validate(src, bytes, "cudaMemcpy (device to host)");
-    await this.pendingEdits;
     const buf = src.alloc.native as GPUBuffer;
     const a0 = src.offset & ~3, a1 = (src.offset + bytes + 3) & ~3;
     const size = Math.max(4, a1 - a0);

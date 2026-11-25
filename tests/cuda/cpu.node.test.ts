@@ -83,6 +83,27 @@ test.describe("runtime API (CPU backend)", () => {
     expect(Array.from(await c.toArray() as Float32Array)).toEqual([11, 22, 33]);
     ctx.destroy();
   });
+  test("the dynamic shared size is part of the compiled kernel: a larger sharedMem is not served the smaller build", async () => {
+    for (const threads of [0, 2]) {
+      const ctx = make(threads);
+      const m = ctx.compile("extern __shared__ float s[];\n__global__ void k(float* o, int n) {\n  for (int i = threadIdx.x; i < n; i += blockDim.x) s[i] = (float)i;\n  __syncthreads();\n  if (threadIdx.x == 0) { float t = 0.0f; for (int i = 0; i < n; i++) t += s[i]; o[0] = t; }\n}");
+      const o = ctx.zeros([1]);
+      await m.launch({ grid: 1, block: 32, sharedMem: 16, args: [o, 4] });
+      expect((await o.toArray())[0]).toBe(6);
+      await m.launch({ grid: 1, block: 32, sharedMem: 4096, args: [o, 1024] });  // same block size, 256x the shared memory
+      expect((await o.toArray())[0]).toBe((1023 * 1024) / 2);
+      ctx.destroy();
+    }
+  });
+  test("a CPU worker script that fails to load falls back to the calling thread instead of hanging", async () => {
+    const ctx = new CudaContext(new WasmBackend({ threads: 2, workerURL: pathToFileURL(path.resolve(import.meta.dirname, "no-such-dir/cuda-worker.js")) }), { requested: "cpu", selected: "wasm", reasons: [] });
+    const m = ctx.compile(sources.vectorAdd);
+    const a = ctx.tensor([1, 2, 3]), b = ctx.tensor([10, 20, 30]), c = ctx.zeros([3]);
+    await m.exec("vector_add<<<dim3(1), 64>>>(a, b, c, n)", { a, b, c, n: 3 });
+    expect(Array.from(await c.toArray() as Float32Array)).toEqual([11, 22, 33]);
+    expect(ctx.info().notes.join(" ")).toMatch(/worker pool unavailable/);
+    ctx.destroy();
+  });
   test("__constant__ symbols: memcpyToSymbol / memcpyFromSymbol", async () => {
     const ctx = make(0);
     const m = ctx.compile("__constant__ float coef[4] = {1, 2, 3, 4};\n__global__ void k(float* o) { o[threadIdx.x] = coef[threadIdx.x] * 2.0f; }");

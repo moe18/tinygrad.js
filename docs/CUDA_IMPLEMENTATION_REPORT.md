@@ -125,13 +125,50 @@ D=64 (1.5×) and `matmul_regtile` at 2048 and 4096 (1.35–1.44×). tinygrad was
 Still open: the first launch of some large kernels took 17–29 s (pipeline creation; cause not found), and a batch of
 twenty ~170 ms launches once triggered the Windows GPU watchdog (`DXGI_ERROR_DEVICE_HUNG`); it didn't reproduce.
 
+## Follow-up: code review fixes
+
+A review of the branch found ten bugs. All are fixed, and each fix has a test that fails without it.
+
+**Remote worker (`server/cuda-worker`).** Tests: `tests/test_gateway.py`, which needs no GPU.
+1. **Kernel source could read host files.** NVRTC opens any file an `#include` names and quotes it in its error log. On
+   the RTX 4070, `#include "/proc/self/environ"` returned the session process's environment in the compile error. The
+   gateway's own `/proc/<pid>/environ`, which holds `TGJS_CUDA_TOKEN_SECRET`, was readable the same way whenever the two
+   processes share a uid. Includes are now limited to plain relative header names (`tgjs_cuda_worker/source.py`). The
+   gateway checks them and so does the NVRTC engine.
+2. **Closing a session could hand its pipes to another session.** `kill()` closed the fds without the session lock. A
+   request in flight could then write to, and read from, fd numbers already reused by a new session. The fds are now
+   closed only while that lock is held. The child is signalled first, so the request in flight ends right away.
+3. **A negative `Content-Length` skipped the body limit.** It did so before authentication: `rfile.read(-1)` reads until
+   the client disconnects. `Content-Length` must now be digits only, and the token is checked before any of the body is
+   read. A refused request's unread body closes the connection.
+4. **Concurrent allocations overshot the memory limit.** Each one checked the quota before any of them was counted.
+   Bytes are now reserved under a lock before the child is called, and a concurrent double free is refused instead of
+   answering 500.
+
+**Library.**
+5. **The executable cache ignored the dynamic shared size.** Its key had the block size but not `sharedMem`, so a second
+   launch with more shared memory reused code sized for less. That gave `cudaErrorIllegalAddress` on the CPU backend and
+   silently clamped accesses on WebGPU.
+6. **A CPU worker script that failed to load hung every launch.** The load error was taken as "ready". Workers now have to
+   answer `ready` within 30 s, or the pool falls back to the calling thread. A worker that dies later fails the launch
+   instead of hanging it.
+7. **Unaligned uploads on WebGPU landed late.** Their edge words were merged on the CPU after an asynchronous read, so
+   launches and writes recorded after them ran first. The aligned middle is now written directly, and the edge words
+   are merged by a tiny compute dispatch, in queue order.
+8. **A tensor passed twice was two copies on the CPU device.** Each copy was written back separately (WebGPU shares one
+   buffer). Each distinct buffer is now sent once, with a map from parameter to buffer.
+9. **`inf` and `NaN` scalars broke launches from Python.** `json.dumps` writes `Infinity`, which `JSON.parse` rejects.
+   They are now tagged on the Python side and turned back into numbers in JavaScript.
+10. **`kernel(...)` defaulted to `lazy=False`.** So a direct call inside `CUDAFunction.backward` ran eagerly, although the
+    docs say launches there are deferred. It now defaults to the context's laziness, like `.launch()`.
+
 ## Hardware and browser compatibility
 
 | | status |
 |---|---|
 | Chromium with WebGPU (SwiftShader) and Node.js 22 | **verified** by the automated suites |
 | hardware GPUs through WebGPU (Chrome/Edge, Firefox 141+, Safari 26+) | **verified on one GPU**: NVIDIA RTX 4070 Laptop GPU, Chromium on Windows (see the follow-up above). Other GPUs and browsers aren't verified; features are detected per adapter (`ctx.info().features`). |
-| NVIDIA GPUs through the remote worker | the protocol, isolation, limits and errors are verified with a test engine. The NVRTC + driver engine (`tgjs_cuda_worker/cuda.py`) has **not run on NVIDIA hardware**. Without a GPU it fails cleanly with `cudaErrorNoDevice`. Run `TGJS_CUDA_TEST_NATIVE=1` on a GPU machine to validate it. |
+| NVIDIA GPUs through the remote worker | the protocol, isolation, limits and errors are verified with a test engine. The NVRTC + driver engine (`tgjs_cuda_worker/cuda.py`) **passes the remote suite on one GPU**: an RTX 4070 Laptop GPU under WSL 2 with CUDA 12.2 (`TGJS_CUDA_TEST_NATIVE=1`, 6/6 tests). Without a GPU it fails cleanly with `cudaErrorNoDevice`. Run `TGJS_CUDA_TEST_NATIVE=1` on a GPU machine to validate it. |
 
 ## Limitations
 
@@ -159,7 +196,7 @@ twenty ~170 ms launches once triggered the Windows GPU watchdog (`DXGI_ERROR_DEV
 
 ## Remaining work
 
-1. Validate the native remote engine on NVIDIA hardware and add the remote symbol and struct-parameter support.
+1. Add the remote symbol and struct-parameter support. The native engine passes the remote suite on one GPU; it still needs a run on a data-center GPU in the Docker image.
 2. Benchmark on more hardware GPUs (done on one NVIDIA GPU), and find why some first launches take 17–29 s on D3D12.
 3. WASM SIMD: vectorize across 4 threads of a block in the CPU codegen.
 4. Close the gap to native CUDA on compute-bound kernels (matmul 1.5–1.8×, flash attention with D=64 3.7× on the RTX

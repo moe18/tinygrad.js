@@ -21,7 +21,7 @@ Custom gradients: subclass ``CUDAFunction`` (forward/backward, like ``torch.auto
 Needs tinygrad >= 0.14 (``Tensor.custom_kernel``).
 """
 from __future__ import annotations
-import json, threading
+import json, math, threading
 from typing import Any, Sequence
 
 __all__ = ["CUDAKernel", "CUDAFunction", "CUDAError", "device_info", "synchronize", "library", "serialize_tensors", "deserialize_tensors"]
@@ -107,7 +107,8 @@ class CUDAKernel:
   def __repr__(self): return f"CUDAKernel({self.name}({', '.join(p['type'] + ' ' + p['name'] for p in self.signature['params'])}))"
 
   # ---------------------------------------------------------------- launching
-  def __call__(self, *args, grid, block, shared_mem: int = 0, lazy: bool = False): return self.launch(grid, block, list(args), shared_mem, lazy=lazy)
+  # lazy=None (not False): inside CUDAFunction.backward a direct call must be deferred like .launch(), as documented
+  def __call__(self, *args, grid, block, shared_mem: int = 0, lazy: bool | None = None): return self.launch(grid, block, list(args), shared_mem, lazy=lazy)
 
   def launch(self, grid, block, args: Sequence[Any], shared_mem: int = 0, *, lazy: bool | None = None) -> _Done:
     """Launch on tensors. Pointer parameters take Tensors, others Python numbers (or dicts / lists for struct and vector
@@ -186,12 +187,17 @@ class CUDAKernel:
 
 def _jsonable(a):
   if isinstance(a, bool): return a
-  if isinstance(a, (int, float)): return a
+  if isinstance(a, int): return a
+  if isinstance(a, float):
+    # JSON has no inf / NaN (json.dumps would write Infinity, which JavaScript's JSON.parse rejects): tag them; the JS side
+    # (parseScalarArgs in src/cuda/tinygrad-host.ts) turns {"$f": ...} back into the number
+    if math.isfinite(a): return a
+    return {"$f": "nan" if math.isnan(a) else "inf" if a > 0 else "-inf"}
   if isinstance(a, dict): return {k: _jsonable(v) for k, v in a.items()}
   if isinstance(a, (list, tuple)): return [_jsonable(v) for v in a]
   try:
     import numpy as np
-    if isinstance(a, np.generic): return a.item()
+    if isinstance(a, np.generic): return _jsonable(a.item())
   except ImportError: pass
   raise CUDAError(f"unsupported scalar argument of type {type(a).__name__}")
 
@@ -233,9 +239,18 @@ class CudaCpuProgram:
     import time
     m = self.meta
     st = time.perf_counter()
+    # bufs has one entry per pointer parameter, so a tensor passed twice appears twice: send each tensor's buffer once (by
+    # its slot) with a parameter -> buffer index, or the kernel would get two separate copies instead of aliased pointers
+    slots = m["slots"] if len(m["slots"]) == len(bufs) else list(range(len(bufs)))
+    first: dict[int, int] = {}
+    for pos, s in enumerate(slots): first.setdefault(s, pos)
+    order = list(first)
+    ubufs = [bufs[first[s]] for s in order]
+    uwritten = [any(w for s2, w in zip(slots, m["written"]) if s2 == s) for s in order]
+    index = [order.index(s) for s in slots]
     outs = _await(_call(_js().launchCPU, m["module"], m["kernel"], json.dumps(m["grid"]), json.dumps(m["block"]), m["smem"],
-                        list(bufs), json.dumps(m["written"]), json.dumps(m["args"])))
-    for b, o in zip([b for b, w in zip(bufs, m["written"]) if w], outs):
+                        ubufs, json.dumps(uwritten), json.dumps(m["args"]), json.dumps(index)))
+    for b, o in zip([b for b, w in zip(ubufs, uwritten) if w], outs):
       mv = b if isinstance(b, memoryview) else memoryview(b)
       mv.cast("B")[:] = o.to_bytes() if hasattr(o, "to_bytes") else bytes(o)
     return time.perf_counter() - st if wait else None
