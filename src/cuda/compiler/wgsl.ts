@@ -147,6 +147,7 @@ class WGSLGen {
     if (bx > this.caps.maxComputeWorkgroupSizeX || by > this.caps.maxComputeWorkgroupSizeY || bz > this.caps.maxComputeWorkgroupSizeZ)
       fail("backend", `block ${bx}x${by}x${bz} exceeds this GPU's workgroup size limits (${this.caps.maxComputeWorkgroupSizeX}x${this.caps.maxComputeWorkgroupSizeY}x${this.caps.maxComputeWorkgroupSizeZ})`);
     this.demoteDoubles();
+    this.uniformReturns();
     this.analyzeRoots();
     this.layoutParams();
     const body = this.genBody();
@@ -181,6 +182,60 @@ class WGSLGen {
   }
 
   private entryName(): string { return `cuda_${this.k.name}`; }
+
+  // ------------------------------------------------------------------ early returns before barriers
+  /**
+   * WGSL requires barriers in uniform control flow, so a thread may not \`return\` before a later __syncthreads(). CUDA
+   * kernels often do (\`if (i >= n) return;\` followed by barriers; exited threads don't block them on NVIDIA GPUs). Such
+   * returns become \`alive = false\` and the following statements are predicated on \`alive\`, with barriers kept outside
+   * the predicates. Threads that "returned" keep executing loop conditions so they reach the barriers.
+   */
+  private uniformReturns(): void {
+    const k = this.k;
+    const isBar = (s: Stmt) => s.s === "barrier" || s.s === "warp";
+    const hasBar = (l: Stmt[]) => containsStmtLocal(l, isBar);
+    const hasRet = (l: Stmt[]) => containsStmtLocal(l, (s) => s.s === "return");
+    // needed only if some return can be followed by a barrier
+    let needed = false;
+    const scan = (l: Stmt[], barrierAfter: boolean): void => {
+      for (let i = 0; i < l.length; i++) {
+        const after = barrierAfter || hasBar(l.slice(i + 1));
+        const s = l[i];
+        if (s.s === "return" && after) needed = true;
+        if (s.s === "if") { scan(s.then, after); scan(s.else, after); }
+        if (s.s === "loop") { const inLoop = after || hasBar([s]); scan(s.body, inLoop); scan(s.cont, inLoop); }
+      }
+    };
+    scan(k.body, false);
+    if (!needed) return;
+    const alive: Var = { id: 1 + Math.max(0, ...k.vars.map((v) => v.id)), name: "alive_", t: vt("bool") };
+    k.vars.push(alive);
+    const aliveE: Expr = { op: "var", t: vt("bool"), v: alive };
+    const pred = (list: Stmt[], guard: boolean, barrierFreeLoop: boolean): Stmt[] => {
+      const out: Stmt[] = [];
+      let dead = guard;
+      for (const s of list) {
+        if (s.s === "return") {
+          out.push({ s: "let", v: alive, e: { op: "const", t: vt("bool"), v: false } });
+          if (barrierFreeLoop) out.push({ s: "break" });
+          return out;
+        }
+        let t: Stmt = s;
+        if (s.s === "if") t = { ...s, then: pred(s.then, dead && hasBar(s.then), barrierFreeLoop), else: pred(s.else, dead && hasBar(s.else), barrierFreeLoop) };
+        else if (s.s === "loop") {
+          const bf = !hasBar([s]);
+          t = { ...s, body: pred(s.body, dead && !bf, bf || barrierFreeLoop && bf), cont: pred(s.cont, dead && !bf, bf) };
+          if (bf && hasRet(s.body)) { out.push(dead ? { s: "if", c: aliveE, then: [t], else: [] } : t); if (barrierFreeLoop) out.push({ s: "if", c: { op: "unop", fn: "!", t: vt("bool"), a: aliveE }, then: [{ s: "break" }], else: [] }); dead = true; continue; }
+        }
+        if (dead && !hasBar([s])) t = { s: "if", c: aliveE, then: [t], else: [] };
+        out.push(t);
+        if (hasRet([s])) dead = true;
+      }
+      return out;
+    };
+    k.body = [{ s: "let", v: alive, e: { op: "const", t: vt("bool"), v: true } }, ...pred(k.body, false, false)];
+    this.notes.push("early returns before barriers became per-thread predication (WGSL needs barriers in uniform control flow)");
+  }
 
   // ------------------------------------------------------------------ double precision
   /**
@@ -756,7 +811,7 @@ class WGSLGen {
       }
     }
     // emulation through workgroup memory: write own value, barrier, read the source lane, barrier
-    const self = "g_lidx";
+    const self = "lidx_";
     const base = `(${self} & ~31u)`;
     const lane = `(${self} & 31u)`;
     const words = (x: string): [string, string | null] => {
@@ -900,13 +955,15 @@ class WGSLGen {
 
   private builtin(n: string): string {
     switch (n) {
-      case "tid.x": return "g_lid.x"; case "tid.y": return "g_lid.y"; case "tid.z": return "g_lid.z";
-      case "bid.x": return "g_bid.x"; case "bid.y": return "g_bid.y"; case "bid.z": return "g_bid.z";
+      // entry-point builtins, not the var<private> copies: WGSL's uniformity analysis treats private variables as
+      // non-uniform, which would reject barriers in loops bounded by blockIdx
+      case "tid.x": return "lid_.x"; case "tid.y": return "lid_.y"; case "tid.z": return "lid_.z";
+      case "bid.x": return "(wid_.x + P[1].x)"; case "bid.y": return "(wid_.y + P[1].y)"; case "bid.z": return "(wid_.z + P[1].z)";
       case "bdim.x": return `${this.k.block[0]}u`; case "bdim.y": return `${this.k.block[1]}u`; case "bdim.z": return `${this.k.block[2]}u`;
       case "gdim.x": return this.word(W_GRID); case "gdim.y": return this.word(W_GRID + 1); case "gdim.z": return this.word(W_GRID + 2);
-      case "tid.linear": return "g_lidx";
-      case "lane": return "(g_lidx & 31u)";
-      case "warp": return "(g_lidx >> 5u)";
+      case "tid.linear": return "lidx_";
+      case "lane": return "(lidx_ & 31u)";
+      case "warp": return "(lidx_ >> 5u)";
     }
     fail("internal", `unknown builtin ${n}`);
   }
@@ -921,8 +978,9 @@ class WGSLGen {
     }
     if (isFloat(s)) {
       const n = Number(v);
-      if (Number.isNaN(n)) return "bitcast<f32>(0x7fc00000u)";
-      if (!Number.isFinite(n)) return n > 0 ? "bitcast<f32>(0x7f800000u)" : "bitcast<f32>(0xff800000u)";
+      // WGSL rejects constant expressions that evaluate to inf/NaN: build them from a parameter word (always 0x7f800000)
+      if (Number.isNaN(n)) return "bitcast<f32>(P[0].w | 0x400000u)";
+      if (!Number.isFinite(n)) return n > 0 ? "bitcast<f32>(P[0].w)" : "bitcast<f32>(P[0].w | 0x80000000u)";
       const f = Math.fround(n);
       if (Object.is(f, -0)) return "-0.0f";
       if (f !== 0 && Math.abs(f) < 1.1754943508222875e-38) { const b = new Uint32Array(new Float32Array([f]).buffer)[0]; return `bitcast<f32>(${b}u)`; }
@@ -1093,10 +1151,10 @@ class WGSLGen {
       case "pow": return this.helper("cuda_pow", `fn cuda_pow(x: f32, y: f32) -> f32 {
   // C semantics: negative bases with integer exponents, x^0 == 1, 1^y == 1
   if (y == 0.0f || x == 1.0f) { return 1.0f; }
-  if (x == 0.0f) { return select(0.0f, bitcast<f32>(0x7f800000u), y < 0.0f); }
+  if (x == 0.0f) { return select(0.0f, bitcast<f32>(P[0].w), y < 0.0f); }
   let r = exp2(y * log2(abs(x)));
   if (x < 0.0f) {
-    if (trunc(y) != y) { return bitcast<f32>(0x7fc00000u); }
+    if (trunc(y) != y) { return bitcast<f32>(P[0].w | 0x400000u); }
     let odd = abs(y) < 16777216.0f && (i32(abs(y)) & 1) == 1;
     return select(r, -r, odd);
   }
@@ -1159,7 +1217,7 @@ fn cuda_erfc_pos(a: f32) -> f32 {
   var refl = 0.0f;
   if (x < 0.5f) {
     let s = sin(3.14159265358979f * x);
-    if (s == 0.0f) { return bitcast<f32>(0x7f800000u); }
+    if (s == 0.0f) { return bitcast<f32>(P[0].w); }
     refl = log(3.14159265358979f / abs(s));
     x = 1.0f - x;
   }
@@ -1173,7 +1231,7 @@ fn cuda_erfc_pos(a: f32) -> f32 {
 }`, []);
         if (e.fn === "lgamma") return `cuda_lgamma(${args[0]})`;
         return this.helper("cuda_tgamma", `fn cuda_tgamma(x: f32) -> f32 {
-  if (x == trunc(x) && x <= 0.0f) { return bitcast<f32>(0x7fc00000u); }
+  if (x == trunc(x) && x <= 0.0f) { return bitcast<f32>(P[0].w | 0x400000u); }
   let r = exp(cuda_lgamma(x));
   if (x > 0.0f) { return r; }
   // sign of gamma for negative non-integers: (-1)^ceil(-x)
@@ -1227,7 +1285,7 @@ fn cuda_erfc_pos(a: f32) -> f32 {
   var ux = bitcast<u32>(x); var uy = bitcast<u32>(y);
   let sx = ux & 0x80000000u;
   ux = ux & 0x7fffffffu; uy = uy & 0x7fffffffu;
-  if (uy == 0u || ux >= 0x7f800000u || uy > 0x7f800000u) { return bitcast<f32>(0x7fc00000u); }
+  if (uy == 0u || ux >= 0x7f800000u || uy > 0x7f800000u) { return bitcast<f32>(P[0].w | 0x400000u); }
   if (ux < uy) { return x; }
   var ex = i32(ux >> 23u); var ey = i32(uy >> 23u);
   var mx: u32; var my: u32;
@@ -1251,7 +1309,7 @@ fn cuda_erfc_pos(a: f32) -> f32 {
     return this.helper("cuda_remainderf", `fn cuda_remainderf(x: f32, y: f32) -> f32 {
   // IEEE remainder x - n*y, n = x/y rounded half to even; t - ay and d - ay are exact (Sterbenz)
   let ay = abs(y);
-  if (cuda_isnan(x) || cuda_isnan(y) || ay == 0.0f || cuda_isinf(x)) { return bitcast<f32>(0x7fc00000u); }
+  if (cuda_isnan(x) || cuda_isnan(y) || ay == 0.0f || cuda_isinf(x)) { return bitcast<f32>(P[0].w | 0x400000u); }
   let t = abs(cuda_fmodf(x, 2.0f * ay));
   var res = t;
   if (t > 0.5f * ay) {
@@ -1388,6 +1446,12 @@ function layoutElemType(L: Layout): string {
 }
 const layoutIsAtomic = (L: Layout) => L.k === "atomic" || (L.k === "words" && L.atomic);
 function layoutStr(L: Layout): string { return L.k === "typed" ? `array<${layoutElemType(L)}>` : `array<${layoutElemType(L)}>`; }
+
+function containsStmtLocal(body: Stmt[], pred: (s: Stmt) => boolean): boolean {
+  let f = false;
+  walkStmts(body, (s) => { if (!f && pred(s)) f = true; });
+  return f;
+}
 
 function containsTrap(body: Stmt[]): boolean {
   let f = false;

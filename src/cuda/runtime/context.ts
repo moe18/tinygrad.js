@@ -372,7 +372,7 @@ export class CudaFunction {
     let p = this.exeCache.get(key);
     if (!p) {
       const sink = new DiagnosticSink();
-      p = this.module.ctx.backend.prepare({ kernel: k, spec, options: this.module.options, sink }).then((exe) => {
+      p = this.module.ctx.backend.prepare({ kernel: k, spec, options: this.module.options, sink, source: this.module.source, ref: this.ref, defines: this.module.options.defines }).then((exe) => {
         for (const w of sink.warnings) this.module.parsed.sink.warn(w.code, w.message, w.loc);
         return exe;
       });

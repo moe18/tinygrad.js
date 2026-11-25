@@ -369,6 +369,9 @@ export function preprocess(src: string, file: string, opts: PreprocessOptions, s
     return last.k === "id" && macros.get(last.v)?.params != null;
   }
 
+  // like nvcc, every translation unit implicitly includes cuda_runtime.h (math constants such as INFINITY, limits)
+  included.add("cuda_runtime.h");
+  processFile(BUILTIN_HEADERS["cuda_runtime.h"], "<cuda_runtime.h>", 1);
   processFile(src, file, 0);
   out.push({ k: "eof", v: "", loc: { file, line: 0, col: 0 }, bol: true, space: true });
   return out;

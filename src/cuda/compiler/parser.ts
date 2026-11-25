@@ -656,7 +656,9 @@ class Parser {
         this.pendingUnroll = n ? (Number(n[1]) <= 1 ? "none" : Number(n[1])) : "full";
         if (!n) this.sink.warn("unsupported", `#pragma unroll ${a}: only integer literal factors are understood; unrolling fully when the trip count is constant`, t.loc);
       } else this.pendingUnroll = "full";
-      return { k: "empty", loc: t.loc };
+      // the pragma applies to the statement that follows (e.g. the body of an enclosing for)
+      if (this.is("}")) return { k: "empty", loc: t.loc };
+      return this.statement();
     }
     if (t.k === "id") {
       if (t.v in UNSUPPORTED_KEYWORDS) fail("unsupported", UNSUPPORTED_KEYWORDS[t.v], t.loc);

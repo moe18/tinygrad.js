@@ -1071,7 +1071,7 @@ class WasmGen {
     switch (e.fn) {
       case "sqrt": arg(0); f.op(F ? OP.f32_sqrt : OP.f64_sqrt); return;
       case "rsqrt":
-        if (F) { arg(0); f.op(OP.f64_promote_f32).op(OP.f64_sqrt); f.f64c(1).op(OP.f64_div); return; }
+        if (F) { f.f64c(1); arg(0); f.op(OP.f64_promote_f32).op(OP.f64_sqrt).op(OP.f64_div).op(OP.f32_demote_f64); return; }
         f.f64c(1); arg(0); f.op(OP.f64_sqrt).op(OP.f64_div); return;
       case "floor": arg(0); f.op(F ? OP.f32_floor : OP.f64_floor); return;
       case "ceil": arg(0); f.op(F ? OP.f32_ceil : OP.f64_ceil); return;
@@ -1167,8 +1167,9 @@ class WasmGen {
       case "ffs": {
         const a = this.tmp(w);
         arg(0); f.set(a);
-        if (w === T.i64) { f.get(a).op(OP.i64_ctz).op(OP.i32_wrap_i64).i32c(1).op(OP.i32_add).i32c(0).get(a).op(OP.i64_eqz).select(); }
-        else { f.get(a).op(OP.i32_ctz).i32c(1).op(OP.i32_add).i32c(0).get(a).op(OP.i32_eqz).select(); }
+        // select(v1, v2, c) = c ? v1 : v2  ->  a == 0 ? 0 : ctz(a) + 1
+        if (w === T.i64) { f.i32c(0).get(a).op(OP.i64_ctz).op(OP.i32_wrap_i64).i32c(1).op(OP.i32_add).get(a).op(OP.i64_eqz).select(); }
+        else { f.i32c(0).get(a).op(OP.i32_ctz).i32c(1).op(OP.i32_add).get(a).op(OP.i32_eqz).select(); }
         this.release(w, a);
         return;
       }

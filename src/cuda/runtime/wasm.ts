@@ -344,7 +344,7 @@ export class WasmBackend implements Backend {
   }
 }
 
-function isNode(): boolean { return typeof process !== "undefined" && Boolean((process as { versions?: { node?: string } }).versions?.node); }
+function isNode(): boolean { return Boolean((globalThis as { process?: { versions?: { node?: string } } }).process?.versions?.node); }
 function hasWorkers(): boolean { return typeof Worker !== "undefined" || isNode(); }
 
 async function spawnWorker(url: string | URL): Promise<PoolWorker> {
@@ -356,11 +356,13 @@ async function spawnWorker(url: string | URL): Promise<PoolWorker> {
     w.onerror = (ev) => { ev.preventDefault?.(); pw.onDone?.({ type: "done", job: -1, error: { message: ev.message || "worker failed to load" } }); };
     return pw;
   }
-  const { Worker: NodeWorker } = await import(/* webpackIgnore: true */ "node:worker_threads" as string) as typeof import("node:worker_threads");
+  interface NodeWorkerLike { postMessage(m: unknown): void; terminate(): unknown; on(ev: string, f: (x: never) => void): void }
+  const NODE_WT = "node:worker_threads";
+  const { Worker: NodeWorker } = await import(/* webpackIgnore: true */ /* @vite-ignore */ NODE_WT) as { Worker: new (u: string | URL) => NodeWorkerLike };
   const path = typeof url === "string" ? url : url.protocol === "file:" ? new URL(url) : url.href;
   const w = new NodeWorker(path as string | URL);
   const pw: PoolWorker = { post: (m) => w.postMessage(m), terminate: () => void w.terminate(), sent, onDone: null };
-  w.on("message", (m) => pw.onDone?.(m));
-  w.on("error", (e) => pw.onDone?.({ type: "done", job: -1, error: { message: e.message } }));
+  w.on("message", (m: DoneMsg) => pw.onDone?.(m));
+  w.on("error", (e: Error) => pw.onDone?.({ type: "done", job: -1, error: { message: e.message } }));
   return pw;
 }

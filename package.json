@@ -1,7 +1,7 @@
 {
   "name": "tinygrad.js",
   "version": "0.1.0",
-  "description": "Run upstream tinygrad in the browser with Pyodide on the browser's WebGPU",
+  "description": "Run upstream tinygrad in the browser with Pyodide on the browser's WebGPU, plus a CUDA C/C++ compiler and runtime for WebGPU, WebAssembly and remote NVIDIA GPUs",
   "license": "MIT",
   "type": "module",
   "main": "./dist/index.js",
@@ -18,7 +18,12 @@
       "import": "./dist/bridge.js"
     },
     "./assets/*": "./dist/assets/*",
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./cuda": {
+      "types": "./dist/cuda/index.d.ts",
+      "import": "./dist/cuda.js"
+    },
+    "./cuda-worker.js": "./dist/cuda-worker.js"
   },
   "files": [
     "dist",
@@ -35,7 +40,11 @@
     "webgpu",
     "machine-learning",
     "wasm",
-    "python"
+    "python",
+    "cuda",
+    "wgsl",
+    "gpu",
+    "compiler"
   ],
   "scripts": {
     "fetch:assets": "node scripts/fetch-assets.mjs",

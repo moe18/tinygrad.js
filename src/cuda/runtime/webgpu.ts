@@ -378,8 +378,8 @@ export class WebGPUBackend implements Backend {
     const exe = exe0 as WebGPUExe;
     const prog = exe.prog;
     const words = new Uint32Array(prog.paramWords);
-    words[3] = 0;
     words.set(cfg.grid, 0);
+    words[3] = 0x7f800000; // +inf bits: WGSL builds inf/NaN constants from this word
     for (const slot of prog.params) {
       const a = args[slot.param];
       if (a.kind !== "scalar") throw new CudaError("cudaErrorInvalidValue", `argument ${slot.param + 1} must be a scalar`);

@@ -35,7 +35,8 @@ if (isBrowserWorker) {
   (self as unknown as { onmessage: (ev: MessageEvent<Msg>) => void }).onmessage = (ev) => handle(ev.data, (m) => (self as unknown as { postMessage(m: unknown): void }).postMessage(m));
 } else {
   // Node.js worker_threads
-  import("node:worker_threads").then(({ parentPort }) => {
+  const NODE_WT = "node:worker_threads";
+  (import(/* webpackIgnore: true */ /* @vite-ignore */ NODE_WT) as Promise<{ parentPort: { on(e: string, f: (m: Msg) => void): void; postMessage(m: unknown): void } | null }>).then(({ parentPort }) => {
     parentPort?.on("message", (msg: Msg) => handle(msg, (m) => parentPort.postMessage(m)));
   }).catch(() => {});
 }

@@ -76,6 +76,10 @@ export interface LaunchOptions {
 
 export interface PrepareRequest {
   kernel: Kernel;
+  /** original CUDA source and kernel reference (used by the remote backend, which compiles with NVRTC) */
+  source?: string;
+  ref?: string;
+  defines?: Record<string, string>;
   spec: SpecKey;
   options: BackendCompileOptions;
   sink: DiagnosticSink;
