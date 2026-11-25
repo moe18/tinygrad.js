@@ -8,7 +8,10 @@ __global__ void vector_add(const float* __restrict__ a, const float* __restrict_
 // float4-vectorized: each thread adds four consecutive elements (n4 = n / 4)
 __global__ void vector_add4(const float4* __restrict__ a, const float4* __restrict__ b, float4* __restrict__ c, int n4) {
   int i = blockIdx.x * blockDim.x + threadIdx.x;
-  if (i < n4) c[i] = a[i] + b[i];
+  if (i < n4) {  // component-wise: plain CUDA has no float4 operator+ (only the SDK's helper_math.h does)
+    float4 x = a[i], y = b[i];
+    c[i] = make_float4(x.x + y.x, x.y + y.y, x.z + y.z, x.w + y.w);
+  }
 }
 __global__ void saxpy(int n, float alpha, const float* __restrict__ x, float* __restrict__ y) {
   for (int i = blockIdx.x * blockDim.x + threadIdx.x; i < n; i += blockDim.x * gridDim.x) y[i] = alpha * x[i] + y[i];

@@ -94,12 +94,43 @@ What these numbers show:
   translated kernel and for handwritten WGSL. On the CPU backend, tiling and register blocking help as they would on a
   GPU.
 
+## Follow-up: hardware GPU (NVIDIA RTX 4070 Laptop GPU)
+
+Run in Chromium 153 on Windows (D3D12), with `TGW_CHANNEL=chromium TGW_CHROMIUM_ARGS=--force-high-performance-gpu`. The
+`cuda-browser` suite passes (53 tests); results in `benchmarks/results/cuda-rtx4070-laptop-chromium-win.md`, the native
+comparison in [CUDA.md](CUDA.md#benchmarks). Running on real hardware found four bugs, now fixed:
+
+1. **The suite's `exec` column measured synchronization, not kernels.** It divided one run of 10 launches by 10, and a
+   browser needs ~2–8 ms to report that the GPU finished, so every fast kernel showed ~0.8 ms. The tinygrad comparison
+   synchronized after every call, so all its pairs came out ~8.2 ms. Both now queue enough calls to fill ~200 ms. For
+   example, vector_add 4M went from 0.80 ms (63 GB/s) to 0.20 ms (247 GB/s).
+2. **GPU timestamps of split grids covered only the last piece.** A grid over 65,535 blocks becomes several dispatches,
+   and each piece got its own timing entry, so callers reading one entry per launch got the last, smallest piece
+   (vector_add 16M: 0.003 ms instead of 0.9 ms). A launch now reports one entry, the sum of its pieces.
+3. **Optimized mode was slower than direct mode on the GPU.** Copy propagation left uniform-buffer reads such as
+   `bitcast<i32>(P[2].z)` inside loops, and D3D12/NVIDIA did not hoist them: matmul_naive ran 1.7–2.3× slower than
+   direct mode (4096: 371 ms against 162 ms). Every uniform word is now read once into a `let` at kernel entry; that
+   kernel takes 158 ms in optimized mode. Optimized is now within 10% of direct mode or faster on every workload measured
+(faster on flash attention D=64 by 1.3× and naive matmul 4096 by 1.14×). The
+   "optimizing passes pay off" result above came from SwiftShader.
+4. **Three library sources weren't plain CUDA.** `vector_add4` used `float4 + float4` (defined only by the SDK's
+   `helper_math.h`), and `mixedPrecision` and `quantized` used `__half` without `<cuda_fp16.h>`. All 20 library sources now
+   compile with nvcc 12.2; `TGJS_NVCC=... npx playwright test tests/cuda/nvcc.node.test.ts` checks this.
+
+Against tinygrad's own operations on this GPU (TinyJit-captured calls, default tinygrad settings, measured before fix 3):
+the library's CUDA kernels were faster on softmax and layernorm 4096² (3.8×), sum of 16M values (2.1×), causal attention
+D=64 (1.5×) and `matmul_regtile` at 2048 and 4096 (1.35–1.44×). tinygrad was faster on vector add (1.4×) and than
+`matmul_tiled` (2.1×). They tied on matmul 1024. This reverses the SwiftShader comparison above.
+
+Still open: the first launch of some large kernels took 17–29 s (pipeline creation; cause not found), and a batch of
+twenty ~170 ms launches once triggered the Windows GPU watchdog (`DXGI_ERROR_DEVICE_HUNG`); it didn't reproduce.
+
 ## Hardware and browser compatibility
 
 | | status |
 |---|---|
 | Chromium with WebGPU (SwiftShader) and Node.js 22 | **verified** by the automated suites |
-| hardware GPUs through WebGPU (Chrome/Edge, Firefox 141+, Safari 26+) | not verified here: no GPU on this machine. The same standard WebGPU API is used; features are detected per adapter (`ctx.info().features`). |
+| hardware GPUs through WebGPU (Chrome/Edge, Firefox 141+, Safari 26+) | **verified on one GPU**: NVIDIA RTX 4070 Laptop GPU, Chromium on Windows (see the follow-up above). Other GPUs and browsers aren't verified; features are detected per adapter (`ctx.info().features`). |
 | NVIDIA GPUs through the remote worker | the protocol, isolation, limits and errors are verified with a test engine. The NVRTC + driver engine (`tgjs_cuda_worker/cuda.py`) has **not run on NVIDIA hardware**. Without a GPU it fails cleanly with `cudaErrorNoDevice`. Run `TGJS_CUDA_TEST_NATIVE=1` on a GPU machine to validate it. |
 
 ## Limitations
@@ -129,10 +160,10 @@ What these numbers show:
 ## Remaining work
 
 1. Validate the native remote engine on NVIDIA hardware and add the remote symbol and struct-parameter support.
-2. Benchmark on hardware GPUs. Real GPUs may well rank the variants differently from SwiftShader.
+2. Benchmark on more hardware GPUs (done on one NVIDIA GPU), and find why some first launches take 17–29 s on D3D12.
 3. WASM SIMD: vectorize across 4 threads of a block in the CPU codegen.
-4. Close the WebGPU performance gap to tinygrad's kernels: vectorized loads, better register tiling defaults, and
-   autotuned library launch parameters.
+4. Close the gap to native CUDA on compute-bound kernels (matmul 1.5–1.8×, flash attention with D=64 3.7× on the RTX
+   4070): vectorized loads, better register tiling defaults, and autotuned library launch parameters.
 5. Grow the language coverage: partial specialization, inheritance, lambdas (inlinable), `cg::reduce`, `%s` with
    literal arguments.
 6. Multi-device and collective primitives on top of the serialization APIs.

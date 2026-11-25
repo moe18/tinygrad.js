@@ -191,6 +191,21 @@ test.describe("code generation", () => {
     expect(s.warnings.some((w2) => /demoted/.test(w2.message))).toBe(true);
     expect(() => generateWGSL(lower("__global__ void k(float* a) { }", "k", [512, 1, 1]), caps, {}, new DiagnosticSink())).toThrow(/exceeds this GPU's maxComputeInvocationsPerWorkgroup/);
   });
+  test("WGSL: parameters and pointer offsets are read from the uniform buffer once, at kernel entry, in both modes", () => {
+    // optimized mode used to propagate `bitcast<i32>(P[2].z)` into the k loop (a 1.7-2.3x slowdown on D3D12/NVIDIA)
+    const gridStride = "__global__ void k(const float* x, float* y, int n) { for (int i = blockIdx.x * blockDim.x + threadIdx.x; i < n; i += blockDim.x * gridDim.x) y[i] = 2.0f * x[i]; }";
+    for (const mode of ["optimized", "direct"] as const) {
+      for (const [src, ref, block] of [[sources.matmul, "matmul_naive", [16, 16, 1]], [gridStride, "k", [256, 1, 1]]] as const) {
+        const code = generateWGSL(lower(src, ref, [...block], mode), caps, {}, new DiagnosticSink()).code;
+        const body = code.slice(code.indexOf("@compute"));
+        expect(body.slice(body.indexOf("loop {"))).not.toMatch(/P\[\d+\]/);  // pointer offsets, sizes, gridDim
+        const reads = body.match(/let uw\d+ = P\[\d+\]\.[xyzw];/g) ?? [];
+        expect(new Set(reads).size).toBe(reads.length);                    // each word once
+      }
+      const mm = generateWGSL(lower(sources.matmul, "matmul_naive", [16, 16, 1], mode), caps, {}, new DiagnosticSink()).code;
+      expect(mm.match(/let prm\d+_i32 = bitcast<i32>\(uw\d+\);/g)).toHaveLength(3);  // M, N, K
+    }
+  });
   test("WebAssembly: phase splitting at barriers and spilled per-thread slots", () => {
     const k = lower(sources.reduction, "reduce_sum<256>", [256, 1, 1]);
     const w = generateWasm(k, { shared: false, maxMemoryPages: 100 }, new DiagnosticSink());

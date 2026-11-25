@@ -1,6 +1,7 @@
 /** Quantized, sparse and mixture-of-experts kernels. */
 
 export const quantized = `
+#include <cuda_fp16.h>
 // INT8 weight-only quantized matmul: y[M,N] = x[M,K] @ (w_q[N,K] * scale[N])^T, int32 accumulation of int8 activations
 // x_q[M,K] int8 with per-row activation scales sx[M] (W8A8): y = (sum_k x_q*w_q) * sx[m] * sw[n]
 __global__ void int8_matmul(const signed char* __restrict__ xq, const float* __restrict__ sx, const signed char* __restrict__ wq,

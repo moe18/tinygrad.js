@@ -94,7 +94,8 @@ export class WebGPUBackend implements Backend {
   private nextBufferId = 1;
   private diagPool: GPUBuffer[] = [];
   private pendingDiag: PendingDiag[] = [];
-  private timed: { name: string; query: number }[] = [];
+  /** one entry per timed launch; a launch split into several dispatches (grid beyond the per-dimension limit) has one query pair per piece */
+  private timed: { name: string; queries: number[] }[] = [];
   private querySet: GPUQuerySet | null = null;
   private queryResolve: GPUBuffer | null = null;
   private queryCount = 0;
@@ -414,6 +415,8 @@ export class WebGPUBackend implements Backend {
     const [gx, gy, gz] = cfg.grid;
     const launchNo = ++this.launches;
     let timestamp: GPUComputePassTimestampWrites | undefined;
+    const timedEntry = opts.timing ? { name: exe.kernel.displayName, queries: [] as number[] } : null;
+    if (timedEntry) this.timed.push(timedEntry);
     for (let z0 = 0; z0 < gz; z0 += maxD) for (let y0 = 0; y0 < gy; y0 += maxD) for (let x0 = 0; x0 < gx; x0 += maxD) {
       words[4] = x0; words[5] = y0; words[6] = z0;
       const ub = this.uniformBuffer(words);
@@ -422,11 +425,10 @@ export class WebGPUBackend implements Backend {
       if (opts.timing && this.infoCache.features.timestamps) {
         const q = this.allocQuery();
         timestamp = { querySet: this.querySet!, beginningOfPassWriteIndex: q, endOfPassWriteIndex: q + 1 };
-        this.timed.push({ name: exe.kernel.displayName, query: q });
+        timedEntry!.queries.push(q);
       }
       this.queue.dispatch(exe.pipeline, bg, Math.min(maxD, gx - x0), Math.min(maxD, gy - y0), Math.min(maxD, gz - z0), timestamp);
     }
-    if (opts.timing && !this.infoCache.features.timestamps) this.timed.push({ name: exe.kernel.displayName, query: -1 });
     if (diagBuf) this.pendingDiag.push({ buf: diagBuf, exe, launch: launchNo, cfg });
   }
 
@@ -539,7 +541,8 @@ export class WebGPUBackend implements Backend {
         const ts = new BigUint64Array(st.getMappedRange().slice(0));
         st.unmap(); st.destroy();
         this.queryCount = 0;
-        times = timed.map((t) => ({ name: t.name, ms: t.query < 0 ? null : Number(ts[t.query + 1] - ts[t.query]) / 1e6 }));
+        // a split launch is the sum of its pieces
+        times = timed.map((t) => ({ name: t.name, ms: t.queries.length ? t.queries.reduce((a, q) => a + Number(ts[q + 1] - ts[q]), 0) / 1e6 : null }));
       } else times = timed.map((t) => ({ name: t.name, ms: null }));
     }
     this.queue.flush();

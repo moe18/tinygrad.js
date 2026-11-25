@@ -9,6 +9,8 @@
 // equivalent tinygrad operations on WEBGPU and on the CPU (PYTHON) device. Every timed result is verified first.
 // Results: benchmarks/results/cuda-<label>.{json,md}; open benchmarks/dashboard.html to browse them.
 // Extra Chromium flags: TGW_CHROMIUM_ARGS="--use-angle=vulkan ..." (e.g. to select a hardware adapter).
+// TGW_CHANNEL=chromium: full Chromium instead of the headless shell (needed for a hardware adapter on Windows; with
+// TGW_CHROMIUM_ARGS=--force-high-performance-gpu on two-GPU laptops).
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -24,7 +26,7 @@ const port = 8791;
 
 const server = spawn(process.execPath, [path.join(root, "scripts/serve.mjs")], { env: { ...process.env, PORT: String(port), COI: "1" }, stdio: "ignore" });
 await new Promise((r) => setTimeout(r, 500));
-const browser = await chromium.launch({
+const browser = await chromium.launch({ ...(process.env.TGW_CHANNEL ? { channel: process.env.TGW_CHANNEL } : {}),
   headless: !process.argv.includes("--headed"),
   args: ["--enable-unsafe-webgpu", "--enable-features=WebGPUDeveloperFeatures", ...(process.env.TGW_CHROMIUM_ARGS ?? "").split(" ").filter(Boolean)],
 });
@@ -68,7 +70,7 @@ const g = out.env.webgpu;
 let md = `# CUDA benchmarks: ${label}\n\n- date: ${out.date}${quick ? " (quick mode)" : ""}\n- browser: Chromium ${out.browser}, cross-origin isolated: ${out.env.isolated}\n`;
 md += `- WebGPU: ${g ? `${g.name} (software fallback adapter: ${g.isFallbackAdapter}; timestamps: ${g.features.timestamps}; subgroups: ${JSON.stringify(g.features.subgroupSize)})` : `unavailable (${out.env.webgpuError})`}\n`;
 md += `- CPU: ${out.host.cpu} × ${out.host.cores} (${out.host.platform}); WASM pool: ${out.env.cpuPool.threads} threads (scalar WebAssembly, no SIMD)\n\n`;
-md += "Times in ms per launch. **exec**: steady state, launches queued back to back (median). **latency**: one launch + synchronize. **compile**: extra time of the first launch (lowering, codegen, pipeline creation; ~0 when an earlier workload already compiled the same kernel for the same block size). **gpu**: GPU timestamp (when supported). Results are verified against host references (max rel. error) before being reported.\n\n";
+md += "Times in ms per launch. **exec**: steady state, launches queued back to back, as many as fill ~200 ms, then one synchronize (median). **latency**: one launch + synchronize. **compile**: extra time of the first launch (lowering, codegen, pipeline creation; ~0 when an earlier workload already compiled the same kernel for the same block size). **gpu**: GPU timestamp (when supported). Results are verified against host references (max rel. error) before being reported.\n\n";
 const workloadsSeen = [...new Set(out.kernels.map((r) => r.workload))];
 md += "| workload | variant | exec | latency | gpu | compile | upload | download | GFLOP/s | GB/s | max rel err |\n|---|---|---|---|---|---|---|---|---|---|---|\n";
 for (const w of workloadsSeen) for (const r of out.kernels.filter((x) => x.workload === w)) {
@@ -76,7 +78,7 @@ for (const w of workloadsSeen) for (const r of out.kernels.filter((x) => x.workl
   md += `| ${w} | ${r.variant} | ${f(r.execMs, 3)} | ${f(r.latencyMs)} | ${f(r.gpuMs, 3)} | ${f(r.compileMs, 1)} | ${f(r.uploadMs)} | ${f(r.downloadMs)} | ${r.flops ? f(r.flops / r.execMs / 1e6, 1) : "–"} | ${r.bytes ? f(r.bytes / r.execMs / 1e6, 1) : "–"} | ${r.ok ? "" : "**FAIL** "}${r.maxRelErr.toExponential(1)} |\n`;
 }
 if (out.tinygrad) {
-  md += `\n## CUDA kernels on tinygrad tensors vs tinygrad operations (tinygrad ${out.tinygrad.runtime.tinygradVersion})\n\nPer call: realize + synchronize, median; both produce the same result (checked).\n\n| device | workload | tinygrad.cuda kernel | tinygrad op | ratio (op / kernel) | max rel err |\n|---|---|---|---|---|---|\n`;
+  md += `\n## CUDA kernels on tinygrad tensors vs tinygrad operations (tinygrad ${out.tinygrad.runtime.tinygradVersion})\n\nPer call: calls realized back to back for ~200 ms, then one synchronize (median); both produce the same result (checked).\n\n| device | workload | tinygrad.cuda kernel | tinygrad op | ratio (op / kernel) | max rel err |\n|---|---|---|---|---|---|\n`;
   for (const r of out.tinygrad.runs) md += `| ${r.device} | ${r.workload} | ${f(r.cuda_ms, 3)} | ${f(r.tinygrad_ms, 3)} | ${r.ok ? f(r.tinygrad_ms / r.cuda_ms) + "×" : "**results differ**"} | ${r.maxRelErr.toExponential(1)} |\n`;
 }
 md += "\nA ratio above 1× means the CUDA kernel was faster on this machine; it says nothing about other hardware. On a software WebGPU adapter (SwiftShader) GPU numbers measure a CPU emulation of a GPU.\n";

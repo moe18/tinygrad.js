@@ -3,7 +3,9 @@
 // For each workload and each variant it reports, separately:
 //   compileMs  first launch + synchronize minus the steady-state execution time (parse, lower, codegen, pipeline creation)
 //   uploadMs   host -> device copies of the inputs
-//   execMs     steady-state time per launch: R launches back to back, then one synchronize, divided by R (median of runs)
+//   execMs     steady-state time per launch: R launches back to back, then one synchronize, divided by R (median of runs).
+//              R is picked so one run lasts ~EXEC_TARGET_MS: with a fixed small R, the ~2-8 ms a browser needs to report
+//              that the GPU finished dominated, and every fast kernel showed (sync latency) / R.
 //   gpuMs      median GPU timestamp time per launch (WebGPU with timestamp-query only)
 //   latencyMs  one launch + synchronize (median): what a single call costs end to end
 //   downloadMs device -> host copy of the output
@@ -15,6 +17,9 @@ const now = () => performance.now();
 const rng = (seed) => () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 2 ** 32 - 0.5; };
 const randArr = (n, seed = 1) => { const r = rng(seed); const a = new Float32Array(n); for (let i = 0; i < n; i++) a[i] = r(); return a; };
 const ceil = (a, b) => Math.ceil(a / b);
+const EXEC_TARGET_MS = 200;
+/** launches per exec run, from an estimate of one launch's cost (GPU timestamp, else single-launch latency) */
+const repsFor = (estMs, min, max = 4000) => Math.max(min, Math.min(max, Math.ceil(EXEC_TARGET_MS / Math.max(estMs, 0.005))));
 const relErr = (got, ref) => {
   let m = 0, scale = 0;
   for (let i = 0; i < ref.length; i++) scale = Math.max(scale, Math.abs(ref[i]));
@@ -130,13 +135,21 @@ async function benchCuda(ctx, w, { mode, runs, reps }) {
   for (let r = 0; r < runs; r++) {
     zero(); t = now(); await launch(true); const rep1 = await ctx.synchronize(); lat.push(now() - t);
     const g = rep1.kernelTimes.at(-1)?.ms; if (g != null) gpu.push(g);
+  }
+  const gpuMs = gpu.length ? median(gpu) : null;
+  let est = gpuMs;
+  if (est == null) {  // no timestamps: time a short batch (single-launch latency would mostly be the sync wait on a GPU)
+    t = now(); for (let k = 0; k < reps; k++) { zero(); await launch(false); } await ctx.synchronize(); est = (now() - t) / reps;
+  }
+  const R = repsFor(est, reps);
+  for (let r = 0; r < runs; r++) {
     t = now();
-    for (let k = 0; k < reps; k++) { zero(); await launch(false); }
-    await ctx.synchronize(); exec.push((now() - t) / reps);
+    for (let k = 0; k < R; k++) { zero(); await launch(false); }
+    await ctx.synchronize(); exec.push((now() - t) / R);
   }
   for (const x of [...I, ...O]) x.free?.();
   const execMs = median(exec);
-  return { parseMs, compileMs: Math.max(0, firstMs - median(lat)), uploadMs, downloadMs, execMs, latencyMs: median(lat), gpuMs: gpu.length ? median(gpu) : null, maxRelErr, ok: maxRelErr <= w.tol };
+  return { parseMs, compileMs: Math.max(0, firstMs - median(lat)), uploadMs, downloadMs, execMs, latencyMs: median(lat), gpuMs, reps: R, maxRelErr, ok: maxRelErr <= w.tol };
 }
 
 // ------------------------------------------------------------------ handwritten WGSL baselines (same algorithms, written directly in WGSL)
@@ -217,12 +230,13 @@ async function benchWGSL(device, w, { runs, reps }) {
   if (verr) throw new Error(`WebGPU validation error: ${verr.message}`);
   const maxRelErr = relErr(got, w.ref());
   const lat = [], exec = [];
-  for (let r = 0; r < runs; r++) {
-    let t = now(); await run(1); lat.push(now() - t);
-    t = now(); await run(reps); exec.push((now() - t) / reps);
-  }
+  for (let r = 0; r < runs; r++) { const t = now(); await run(1); lat.push(now() - t); }
+  // no timestamps here: estimate one launch from a short batch (latency alone would mostly be the sync wait)
+  let t = now(); await run(reps); const est = (now() - t) / reps;
+  const R = repsFor(est, reps);
+  for (let r = 0; r < runs; r++) { t = now(); await run(R); exec.push((now() - t) / R); }
   for (const b of [...bufs, rb]) b.destroy();
-  return { compileMs, uploadMs, downloadMs, execMs: median(exec), latencyMs: median(lat), gpuMs: null, maxRelErr, ok: maxRelErr <= w.tol };
+  return { compileMs, uploadMs, downloadMs, execMs: median(exec), latencyMs: median(lat), gpuMs: null, reps: R, maxRelErr, ok: maxRelErr <= w.tol };
 }
 
 // ------------------------------------------------------------------ driver

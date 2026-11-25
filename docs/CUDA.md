@@ -304,8 +304,9 @@ CUDA source ─▶ preprocessor ─▶ parser (AST) ─▶ semantic analysis + l
 - **WGSL backend:**
   - Buffers bind as typed arrays or words, as each buffer's accesses require, with atomic layouts where needed. Aliased
     pointer arguments share one binding.
-  - Scalar parameters go through one uniform. Grids larger than `maxComputeWorkgroupsPerDimension` are split into
-    several dispatches.
+  - Scalar parameters go through one uniform, read once at kernel entry (pointer offsets and `gridDim` too), so no
+    uniform loads are left inside loops. Grids larger than `maxComputeWorkgroupsPerDimension` are split into several
+    dispatches; a timed launch reports the sum of its pieces.
   - Barriers are uniform as WGSL requires: early returns before `__syncthreads()` are predicated.
   - `storageBarrier` is emitted only when global memory can carry data between threads.
 - **WebAssembly backend:**
@@ -426,8 +427,8 @@ includes:
 | Node.js 18+ | no WebGPU | yes (`worker_threads`) |
 | servers with NVIDIA GPUs | — | — (remote backend: NVRTC + driver, sm_50+) |
 
-Tested in CI: Chromium with SwiftShader (software WebGPU) and Node.js. Real-GPU adapters behave the same through the
-same WebGPU API, but their numbers aren't covered by the benchmarks below.
+Tested in CI: Chromium with SwiftShader (software WebGPU) and Node.js. Also run on a hardware GPU: an NVIDIA RTX 4070
+Laptop GPU in Chromium on Windows (D3D12), where the whole `cuda-browser` suite passes; its benchmark numbers are below.
 
 ## Security
 
@@ -448,6 +449,11 @@ npm run build
 npx playwright test --project=cuda-node      # compiler unit tests, CPU backend (inline + 4 workers), runtime API, remote worker end to end
 npx playwright test --project=cuda-browser   # WebGPU backend, CPU worker pool in a browser, tinygrad.cuda on WEBGPU and CPU, playground
 ```
+
+On a GPU machine, run the browser suite on the hardware adapter with `TGW_CHANNEL=chromium` (full Chromium; on Windows
+the headless shell returns no adapter) and, on laptops with two GPUs, `TGW_CHROMIUM_ARGS=--force-high-performance-gpu`.
+`TGJS_NVCC=/usr/local/cuda/bin/nvcc` (or `"wsl /usr/local/cuda/bin/nvcc"` on Windows) also compiles every library
+source with NVIDIA's compiler, which keeps the library plain CUDA.
 
 The suites cover the following:
 
@@ -477,3 +483,18 @@ The measured results from the development machine are in
 [`benchmarks/results/cuda-swiftshader-chromium-linux.md`](../benchmarks/results/cuda-swiftshader-chromium-linux.md).
 That machine has only a software WebGPU adapter, so its "GPU" numbers measure SwiftShader running on the CPU, not GPU
 hardware.
+
+Hardware-GPU results (NVIDIA RTX 4070 Laptop GPU, Chromium 153 on Windows) are in
+[`benchmarks/results/cuda-rtx4070-laptop-chromium-win.md`](../benchmarks/results/cuda-rtx4070-laptop-chromium-win.md).
+On that GPU, with the same kernel sources compiled by nvcc 12.2 as the reference (larger sizes than the suite's):
+
+| workload | CUDA→WGSL in Chromium | native CUDA | |
+|---|---|---|---|
+| vector_add, reduce_sum (16M), softmax, layernorm (4096²) | 0.28–0.88 ms, 228–237 GB/s | 0.27–0.84 ms | 1.00–1.05× |
+| `matmul_regtile<64,64,8,4,4>` 2048 / 4096 | 5.4 / 45.4 ms | 3.1 / 28.6 ms | 1.6–1.8× slower |
+| `matmul_tiled<16>` 4096 | 142 ms | 95 ms | 1.5× slower |
+| `flash_attention_fwd<32,16,64>`, causal, H=16 T=2048 D=64 | 11.4 ms | 3.1 ms | 3.7× slower |
+| cuBLAS SGEMM 4096 | – | 14.0 ms | |
+
+Memory-bound kernels run at native speed. A launch plus `synchronize()` costs at least ~2.5 ms in the browser (~0.25 ms
+natively), so many small synchronized launches are dominated by that latency; queue launches and synchronize once.

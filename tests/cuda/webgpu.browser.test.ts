@@ -120,6 +120,27 @@ test.describe("kernel library on WebGPU", () => {
     if (r.supported) expect(r.times[0].ms).toBeGreaterThan(0);
     else expect(r.times[0].ms).toBeNull();
   });
+  test("a timed launch split into several dispatches reports one time covering every piece", async () => {
+    const r = await page.evaluate(async () => {
+      const w = window as unknown as W;
+      const ctx = w.ctx;
+      const m = ctx.compile(`__global__ void k(float* c) {
+        float v = threadIdx.x;
+        for (int i = 0; i < 64; ++i) v = v * 1.0001f + 1.0f;
+        if (v == -1.0f) c[0] = v;
+      }`);
+      const c = ctx.zeros([1]);
+      // 70000 blocks = a full piece of 65535 + one of 4465: the reported time must cover both, not the last piece alone
+      await m.launch({ grid: [70000], block: [32], args: [c], timing: true });
+      const split = (await ctx.synchronize()).kernelTimes;
+      await m.launch({ grid: [70000 - 65535], block: [32], args: [c], timing: true });
+      const last = (await ctx.synchronize()).kernelTimes;
+      return { supported: ctx.info().features.timestamps, split, last };
+    });
+    expect(r.split).toHaveLength(1);
+    if (!r.supported) { expect(r.split[0].ms).toBeNull(); return; }
+    expect(r.split[0].ms).toBeGreaterThan(r.last[0].ms);
+  });
   test("CUDA.compile + launch: the README example", async () => {
     const r = await page.evaluate(async () => {
       const w = window as unknown as W;
@@ -164,12 +185,13 @@ test.describe("kernel library on WebGPU", () => {
       const msgs: string[] = [];
       const t = async (src: string, block: number, args: unknown[]) => { try { await ctx.compile(src).launch({ grid: 1, block, args }); msgs.push("ok"); } catch (e) { msgs.push((e as Error).message); } };
       await t("__global__ void k(float* a) { a[0] = a[0] * 0.1; }", 1, [ctx.zeros([1])]);
-      await t("__global__ void k(float* a) { a[0] = 1.0f; }", 1024, [ctx.zeros([1])]);
+      // twice the adapter's limit (256 on SwiftShader, 1024 on e.g. NVIDIA GPUs)
+      await t("__global__ void k(float* a) { a[0] = 1.0f; }", 2 * ctx.info().limits.maxThreadsPerBlock, [ctx.zeros([1])]);
       await t("__global__ void k(unsigned long long* a) { atomicAdd(a, 1ull); }", 1, [ctx.zeros([1], "uint64")]);
       return msgs;
     });
     expect(r[0]).toMatch(/double precision is not supported by WebGPU.*0\.5f|double precision is not supported by WebGPU/);
-    expect(r[1]).toMatch(/cudaErrorInvalidConfiguration: block of 1024 threads exceeds/);
+    expect(r[1]).toMatch(/cudaErrorInvalidConfiguration: block of \d+ threads exceeds/);
     expect(r[2]).toMatch(/atomics are not supported by WebGPU/);
   });
   test("AUTO device selection: software WebGPU adapter -> CPU backend with a reason; allowSoftwareWebGPU keeps WebGPU", async () => {

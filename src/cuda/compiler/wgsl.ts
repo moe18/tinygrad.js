@@ -121,6 +121,13 @@ class WGSLGen {
   private out: string[] = [];
   private roots = new Map<Root, RootGen>();
   private paramSlots: ParamSlot[] = [];
+  /**
+   * Uniform-buffer reads (scalar parameters, pointer offsets and limits, grid size) happen once, into `let`s at kernel
+   * entry. Copy propagation in the IR passes otherwise leaves e.g. `bitcast<i32>(P[2].z)` inside hot loops (as a loop
+   * bound), which D3D12/NVIDIA did not hoist: matmul_naive ran 1.7-2.3x slower than the unoptimized code.
+   */
+  private paramLets = new Map<string, string>();
+  private paramLetLines: string[] = [];
   private pointerWords: WGSLProgram["pointerWords"] = [];
   private nextWord = W_FIRST;
   private bindings: BindingInfo[] = [];
@@ -163,6 +170,7 @@ class WGSLGen {
       `@compute @workgroup_size(${bx}, ${by}, ${bz})`,
       `fn ${this.entryName()}(@builtin(local_invocation_id) lid_: vec3<u32>, @builtin(workgroup_id) wid_: vec3<u32>, @builtin(local_invocation_index) lidx_: u32${this.warpMode === "subgroups" ? ", @builtin(subgroup_invocation_id) sglane_: u32" : ""}) {`,
       `  g_lid = lid_; g_bid = wid_ + vec3<u32>(P[1].x, P[1].y, P[1].z); g_lidx = lidx_;`,
+      ...this.paramLetLines,
       ...this.k.vars.map((v) => `  var ${v.name}: ${regType(v.t)};`),
       body,
       "}",
@@ -448,7 +456,17 @@ class WGSLGen {
     }
   }
 
-  private word(w: number): string { return `P[${w >> 2}].${"xyzw"[w & 3]}`; }
+  /** a uniform word (scalar parameter, pointer base/limit, grid size, ...): read once at kernel entry, see paramLets */
+  private word(w: number): string {
+    const key = `w${w}`;
+    let name = this.paramLets.get(key);
+    if (!name) {
+      name = `uw${w}`;
+      this.paramLetLines.push(`  let ${name} = P[${w >> 2}].${"xyzw"[w & 3]};`);
+      this.paramLets.set(key, name);
+    }
+    return name;
+  }
 
   // ------------------------------------------------------------------ declarations
   private genDecls(): string[] {
@@ -920,7 +938,14 @@ class WGSLGen {
       case "param": {
         const slot = this.paramSlots.find((p) => p.param === e.index);
         if (!slot) fail("internal", `parameter ${e.name} has no slot`);
-        return this.paramRead(slot, e.t);
+        const key = `${e.index}:${e.t.s}x${e.t.n}`;
+        let name = this.paramLets.get(key);
+        if (!name) {
+          name = `prm${e.index}_${e.t.s}${e.t.n > 1 ? `x${e.t.n}` : ""}`;
+          this.paramLetLines.push(`  let ${name} = ${this.paramRead(slot, e.t)};`);
+          this.paramLets.set(key, name);
+        }
+        return name;
       }
       case "builtin": return this.builtin(e.name);
       case "unop": {

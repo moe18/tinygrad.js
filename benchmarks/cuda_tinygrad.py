@@ -1,7 +1,9 @@
 # CUDA kernels on tinygrad tensors (tinygrad.cuda) vs the equivalent standard tinygrad operations, in the same runtime.
-# Each pair is checked for equal results first. Times are per call: realize + device synchronize, median of runs,
-# kernels already compiled (warmup). Prints one line: BENCH_JSON:{...}
-import json, statistics, time
+# Each pair is checked for equal results first. Times are per call: K calls realized back to back, then one device
+# synchronize, divided by K (median of runs), kernels already compiled (warmup). K is picked so a run lasts ~200 ms:
+# synchronizing after every call measured the browser's GPU completion latency (~8 ms), not the kernels.
+# Prints one line: BENCH_JSON:{...}
+import json, math, statistics, time
 import numpy as np
 from tinygrad import Tensor, Device
 from tinygrad.cuda import CUDAKernel, library
@@ -10,11 +12,19 @@ QUICK = bool(globals().get("BENCH_QUICK", 0))
 DEVICES = globals().get("BENCH_DEVICES", Device.DEFAULT).split(",")
 out = {"runs": []}
 
-def timeit(fn, dev, runs, warmup=2):
+def timeit(fn, dev, runs, warmup=2, target_ms=200):
   for _ in range(warmup): fn(); Device[dev].synchronize()
+  t = time.perf_counter(); fn(); Device[dev].synchronize(); est = (time.perf_counter() - t) * 1e3
+  if est < target_ms / 5:  # fast call: the single-call time is mostly sync latency, so estimate from a short batch
+    t = time.perf_counter()
+    for _ in range(5): fn()
+    Device[dev].synchronize(); est = (time.perf_counter() - t) * 1e3 / 5
+  k = max(1, min(2000, math.ceil(target_ms / max(est, 0.005))))
   ts = []
   for _ in range(runs):
-    t = time.perf_counter(); fn(); Device[dev].synchronize(); ts.append((time.perf_counter() - t) * 1e3)
+    t = time.perf_counter()
+    for _ in range(k): fn()
+    Device[dev].synchronize(); ts.append((time.perf_counter() - t) * 1e3 / k)
   return statistics.median(ts)
 
 vadd = CUDAKernel(library("vectorAdd"), "vector_add")

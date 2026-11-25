@@ -54,6 +54,8 @@ __global__ void accumulate(float* __restrict__ acc, const float* __restrict__ g,
 `;
 
 export const mixedPrecision = `
+#include <cuda_fp16.h>
+#include <cuda_bf16.h>
 __global__ void cast_f32_to_f16(const float* __restrict__ x, __half* __restrict__ y, int n) {
   int i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i < n) y[i] = __float2half(x[i]);
