@@ -23,8 +23,10 @@ export default defineConfig<TestOptions>({
     trace: "off",
   },
   projects: [
-    { name: "tinygrad-0.14.0", use: { tinygradVersion: "0.14.0" }, testIgnore: /cuda\// },
-    { name: "tinygrad-0.12.0", use: { tinygradVersion: "0.12.0" }, testIgnore: /init\.test\.ts|demo\.test\.ts|playground\.test\.ts|cuda\// },
+    // testIgnore is matched against the absolute path: anchored to tests/cuda/, because a bare /cuda\// also matched a
+    // checkout folder like ".../tinygrad.js-cuda/" and silently ignored every test
+    { name: "tinygrad-0.14.0", use: { tinygradVersion: "0.14.0" }, testIgnore: /[\\/]tests[\\/]cuda[\\/]/ },
+    { name: "tinygrad-0.12.0", use: { tinygradVersion: "0.12.0" }, testIgnore: /init\.test\.ts|demo\.test\.ts|playground\.test\.ts|[\\/]tests[\\/]cuda[\\/]/ },
     // CUDA compiler + CPU backend in Node.js (no browser), and the browser suites (WebGPU, tinygrad.cuda in Pyodide, playground)
     { name: "cuda-node", testMatch: /cuda\/.*\.node\.test\.ts$/ },
     { name: "cuda-browser", testMatch: /cuda\/.*\.browser\.test\.ts$/, use: { tinygradVersion: "0.14.0" } },
