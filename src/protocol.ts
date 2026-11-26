@@ -7,6 +7,8 @@ export interface InitConfig {
   tinygradWheelURL: string;
   packages: string[];
   network: "none" | "allow";
+  /** Before each run, load the Pyodide packages the code imports (pandas, matplotlib, ...). */
+  loadPackagesOnImport: boolean;
   /** Make `import torch` resolve to the PyTorch-compatible shim. */
   torch: boolean;
   maxGpuMemoryBytes?: number;

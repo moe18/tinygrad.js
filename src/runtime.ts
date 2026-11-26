@@ -50,6 +50,7 @@ export class TinygradRuntime {
       tinygradWheelURL: new URL(opts.tinygradWheelURL ?? bundledWheelURL(opts.tinygradVersion), globalThis.location?.href).href,
       packages: opts.packages ?? [],
       network: opts.network ?? "none",
+      loadPackagesOnImport: opts.loadPackagesOnImport ?? false,
       torch: opts.torch ?? true,
       maxGpuMemoryBytes: opts.maxGpuMemoryBytes,
     };
