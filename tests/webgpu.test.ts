@@ -97,3 +97,33 @@ test("maxGpuMemoryBytes limits GPU allocations", async ({ browser, tinygradVersi
     expect(r.error!.message + r.error!.traceback).toMatch(/memory limit exceeded/);
   } finally { await limited.close(); }
 });
+
+test("generated WGSL avoids constructs that only Chrome's compiler accepts (bitcast<u32> of a negative literal)", async ({ tinygradVersion }) => {
+  // Upstream's renderer writes negative uint32 constants as bitcast<u32>(-32), e.g. in the RNG kernel of a 16x2 tensor (the
+  // first-layer weights of a width-16 MLP). Safari rejects that: "value -32 cannot be represented as 'u32'".
+  const r = await s.run(`
+import re
+from tinygrad import Tensor, nn, Device
+import tinygrad_js.webgpu as wg
+assert wg.portable_wgsl("x+bitcast<u32>(-32)+bitcast<u32>(-1)+bitcast<u32>(7)+bitcast<i32>(-3)") == "x+4294967264u+4294967295u+bitcast<u32>(7)+bitcast<i32>(-3)"
+sources, orig = [], wg.WebGpuDevice.compile
+def recording(self, name, src):
+  sources.append(src); return orig(self, name, src)
+wg.WebGpuDevice.compile = recording
+try:
+  Tensor.manual_seed(1)
+  layers = [nn.Linear(2, w) for w in (4, 8, 16, 32, 64)]
+  Tensor.realize(*[t for l in layers for t in (l.weight, l.bias)])
+  for n in (3, 16, 32, 100): Tensor.rand(n, 2).realize(); Tensor.randn(n).realize()
+finally: wg.WebGpuDevice.compile = orig
+bad = [s for s in sources if re.search(r"bitcast<u32>\\(\\s*-", s)]
+print(len(sources), len(bad), sum("4294967264u" in s for s in sources), float(layers[2].weight.abs().max().item()) <= 2 ** -0.5 + 1e-6)
+`);
+  expect(r.ok, r.error?.traceback).toBe(true);
+  const [compiled, bad, rewritten, inRange] = r.stdout.trim().split(" ");
+  expect(Number(compiled)).toBeGreaterThan(0);
+  expect(Number(bad), "kernels still containing bitcast<u32>(-N)").toBe(0);
+  // tinygrad 0.12 renders that constant differently, so there is nothing to rewrite there
+  if (tinygradVersion !== "0.12.0") expect(Number(rewritten), "the 16x2 RNG kernel was rewritten").toBeGreaterThan(0);
+  expect(inRange).toBe("True");
+});
