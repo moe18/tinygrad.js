@@ -13,7 +13,7 @@ Synchronous points (buffer readback, ``synchronize``, pipeline compilation) awai
 is running inside ``runPythonAsync``.
 """
 from __future__ import annotations
-import functools, inspect, time
+import functools, inspect, re, time
 from tinygrad.device import Compiled, LRUAllocator, BufferSpec
 from tinygrad.renderer.wgsl import WGSLRenderer
 from tinygrad.helpers import round_up
@@ -48,13 +48,22 @@ def _await(promise):
 _COMPILED_PARAMS = inspect.signature(Compiled.__init__).parameters
 NEW_DEVICE_API = "renderers" in _COMPILED_PARAMS        # tinygrad >= 0.13: Compiled(device, allocator, renderers, runtime_t)
 
+_NEG_U32 = re.compile(r"bitcast<u32>\((-\d+)\)")
+
+def portable_wgsl(src:str) -> str:
+  """Rewrite WGSL that only lenient compilers accept. tinygrad's WGSLRenderer writes a negative uint32 constant as
+  ``bitcast<u32>(-32)``. The WGSL spec makes that a shader-creation error (-32 is not representable as u32): Chrome's compiler
+  (Tint) accepts it, Safari's rejects it with "value -32 cannot be represented as 'u32'". Emit the two's-complement literal
+  (``4294967264u``) instead, which is the same value everywhere."""
+  return _NEG_U32.sub(lambda m: f"{int(m.group(1)) & 0xffffffff}u", src)
+
 class WebGPUProgram:
   """One compiled WGSL kernel. Constructed as (dev, TinyELF) on tinygrad >= 0.13, or (dev, name, lib) on 0.12."""
   def __init__(self, dev:WebGpuDevice, name_or_obj, lib:bytes|None=None):
     if lib is None: name, lib = name_or_obj.name, name_or_obj.lib
     else: name = name_or_obj
     self.dev, self.name = dev, name
-    self.src = lib.decode() if isinstance(lib, (bytes, bytearray)) else str(lib)
+    self.src = portable_wgsl(lib.decode() if isinstance(lib, (bytes, bytearray)) else str(lib))
     self.pid = dev.compile(name, self.src)
 
   def __call__(self, *bufs, global_size=(1,1,1), local_size=(1,1,1), vals=(), wait=False, **kw) -> float|None:

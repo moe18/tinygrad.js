@@ -13,6 +13,8 @@ browser-specific lives in `python/tinygrad_js/` and is plugged in at runtime.
 | No multiprocessing | `PARALLEL=0` (tinygrad's own knob). | `__init__.py` |
 | **Behavioural patch** (1) | `Tensor._buffer` is wrapped so that device-less tensors are realized on `Device.DEFAULT` instead of the hard-coded `"CPU"`. It's only applied when upstream's source contains `clone("CPU")` (≥ 0.13). Numerics are identical; only where the kernel runs changes. | `patches.py` |
 
+| WGSL portability | `webgpu.portable_wgsl` rewrites `bitcast<u32>(-N)`, which upstream's `WGSLRenderer` emits for negative uint32 constants (e.g. in the threefry RNG kernel of a 16×2 `Tensor.rand`), to the equivalent literal `4294967264u`. The WGSL spec rejects the original form; Chrome's Tint accepts it, Safari's compiler does not. The value is unchanged. | `webgpu.py` |
+
 `tinygrad_js.applied_patches()` (and `RuntimeInfo.diagnostics` in JS) reports which patches are active.
 
 ### The device contract the backend relies on
@@ -73,6 +75,7 @@ The shim checks for `has_buffer_identity`/`is_virtual` and reports "needs tinygr
 
 ## Possible upstream contributions
 
+* Render negative uint32 constants in `WGSLRenderer` as unsigned literals instead of `bitcast<u32>(-N)` (see "WGSL portability").
 * Let `Tensor._buffer` realize device-less tensors on `Device.DEFAULT`, or make the host device configurable. That would remove the
   only behavioural patch.
 * Make `ops_webgpu.py`'s Dawn access pluggable (e.g. a small "WebGPU API" interface with ctypes-Dawn and JS implementations).
