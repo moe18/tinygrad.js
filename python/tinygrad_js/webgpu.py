@@ -63,10 +63,16 @@ class WebGPUProgram:
     if lib is None: name, lib = name_or_obj.name, name_or_obj.lib
     else: name = name_or_obj
     self.dev, self.name = dev, name
+    from .cuda import parse_lib
+    self.cuda_meta = parse_lib(lib)
+    if self.cuda_meta is not None: self.pid = -1; return   # a CUDA kernel (tinygrad.cuda): compiled by the JS CUDA runtime
     self.src = portable_wgsl(lib.decode() if isinstance(lib, (bytes, bytearray)) else str(lib))
     self.pid = dev.compile(name, self.src)
 
   def __call__(self, *bufs, global_size=(1,1,1), local_size=(1,1,1), vals=(), wait=False, **kw) -> float|None:
+    if self.cuda_meta is not None:
+      from .cuda import webgpu_program_call
+      return webgpu_program_call(self, bufs, global_size, local_size, wait)
     gx, gy, gz = (int(g) for g in (tuple(global_size) + (1,1,1))[:3])
     if wait: st = time.perf_counter()
     # pass plain ints only: they cross the Python->JS boundary without allocating proxies
@@ -77,7 +83,8 @@ class WebGPUProgram:
     return None
 
   def __del__(self):
-    try: self.dev.bridge.releaseProgram(self.pid)
+    try:
+      if self.pid >= 0: self.dev.bridge.releaseProgram(self.pid)
     except Exception: pass
 
 class WebGpuAllocator(LRUAllocator):

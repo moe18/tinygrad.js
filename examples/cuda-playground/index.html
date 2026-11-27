@@ -1,0 +1,574 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CUDA Playground</title>
+<link rel="icon" href="data:,">
+<style>
+  :root {
+    --bg: #f6f6f4; --panel: #ffffff; --line: #e2e2dc; --text: #1c1c1a; --muted: #6b6b66; --accent: #1c1c1a;
+    --err: #c0392b; --ok: #1e8a4c; --warn: #a76a00; --mono: ui-monospace, "Cascadia Code", Consolas, monospace;
+    --v0: #2f6fdb; --v1: #e8833a; --v2: #1f9d74; --v3: #8a5cf6; --dim: #d8d8d2;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #111110; --panel: #1a1a19; --line: #2c2c2a; --text: #ecece8; --muted: #9a9a94; --accent: #ecece8; --dim: #34342f; --err: #ef6b6b; --ok: #3cc37a; --warn: #e5a83a; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 system-ui, sans-serif; }
+  header { padding: 16px 20px 4px; display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 16px; }
+  h1 { font-size: 18px; margin: 0; }
+  #status { color: var(--muted); font-size: 13px; }
+  body.embed header { display: none; }
+  main { display: grid; grid-template-columns: minmax(320px, 1fr) minmax(320px, 1fr); gap: 14px; padding: 10px 20px 24px; }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; padding: 10px 16px 24px; } }
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px; min-width: 0; }
+  h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 8px; font-weight: 600; }
+  textarea#src { width: 100%; min-height: 380px; resize: vertical; font: 13px/1.5 var(--mono); color: var(--text); background: var(--bg);
+    border: 1px solid var(--line); border-radius: 6px; padding: 8px; tab-size: 4; white-space: pre; overflow: auto; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 8px; }
+  button, select, input { font: inherit; font-size: 13px; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; }
+  button { cursor: pointer; } button:hover:not(:disabled) { border-color: var(--muted); } button:disabled { opacity: .45; cursor: default; }
+  button.primary { background: var(--accent); color: var(--bg); border-color: var(--accent); font-weight: 600; }
+  input.dim { width: 64px; } label { font-size: 13px; color: var(--muted); display: inline-flex; align-items: center; gap: 6px; }
+  .tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--line); margin-bottom: 8px; flex-wrap: wrap; }
+  .tabs button { border: none; border-bottom: 2px solid transparent; border-radius: 0; background: none; padding: 6px 10px; color: var(--muted); }
+  .tabs button.on { color: var(--text); border-bottom-color: var(--text); }
+  pre { margin: 0; font: 12px/1.5 var(--mono); white-space: pre; overflow: auto; max-height: 460px; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 8px; }
+  .diag { font: 12px/1.5 var(--mono); padding: 6px 8px; border-radius: 6px; margin: 4px 0; cursor: pointer; white-space: pre-wrap; }
+  .diag.error { background: color-mix(in srgb, var(--err) 12%, transparent); color: var(--err); }
+  .diag.warning { background: color-mix(in srgb, var(--warn) 12%, transparent); color: var(--warn); }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; } th, td { padding: 4px 6px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: middle; }
+  td input, td select { width: 100%; min-width: 60px; } .scroll { overflow-x: auto; }
+  .stat { font-variant-numeric: tabular-nums; } .ok { color: var(--ok); } .bad { color: var(--err); } .muted { color: var(--muted); }
+  canvas.viz { width: 100%; display: block; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); }
+  .hint { font-size: 12px; color: var(--muted); margin: 6px 0 0; }
+  #viz-info { font: 12px/1.5 var(--mono); min-height: 3em; margin-top: 6px; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<header>
+  <h1>CUDA Playground</h1>
+  <span id="status">loading…</span>
+</header>
+<main>
+  <section>
+    <h2>Kernel</h2>
+    <div class="row" style="margin-top:0">
+      <label>example <select id="example"></select></label>
+      <label>backend <select id="backend"><option value="auto">auto</option><option value="webgpu">WebGPU</option><option value="cpu">CPU (WebAssembly)</option></select></label>
+      <label>compiler <select id="mode"><option value="optimized">optimized</option><option value="direct">direct</option></select></label>
+    </div>
+    <textarea id="src" spellcheck="false" aria-label="CUDA source"></textarea>
+    <div id="diags"></div>
+    <div class="row">
+      <label>kernel <select id="kernel"></select></label>
+      <label>grid <input class="dim" id="gx" value="4"><input class="dim" id="gy" value="1"><input class="dim" id="gz" value="1"></label>
+      <label>block <input class="dim" id="bx" value="256"><input class="dim" id="by" value="1"><input class="dim" id="bz" value="1"></label>
+    </div>
+    <h2 style="margin-top:12px">Arguments</h2>
+    <div class="scroll"><table id="args"><thead><tr><th>parameter</th><th>value / buffer</th><th>elements</th><th>init</th></tr></thead><tbody></tbody></table></div>
+    <div class="row">
+      <button class="primary" id="run" disabled>Run</button>
+      <button id="bench" disabled>Benchmark & compare backends</button>
+      <label><input type="checkbox" id="bounds"> bounds checks</label>
+    </div>
+    <p class="hint">Ctrl/⌘+Enter runs. The source is ordinary CUDA C++: <code>__global__</code>, <code>__shared__</code>, templates, structs, warp intrinsics, atomics, <code>printf</code>.</p>
+  </section>
+  <section>
+    <div class="tabs" id="tabs">
+      <button data-tab="out" class="on">Output</button><button data-tab="ir">Kernel IR</button><button data-tab="code">Generated code</button><button data-tab="learn">Learn</button>
+    </div>
+    <div data-pane="out"><div id="summary" class="muted">Run a kernel to see its results.</div><pre id="output" style="margin-top:8px"></pre></div>
+    <div data-pane="ir" hidden><pre id="ir"></pre></div>
+    <div data-pane="code" hidden><div id="code-notes" class="hint" style="margin:0 0 6px"></div><pre id="code"></pre></div>
+    <div data-pane="learn" hidden>
+      <div class="row" style="margin-top:0">
+        <label>topic <select id="viz">
+          <option value="index">thread & block indexing, warps</option>
+          <option value="coalesce">memory coalescing</option>
+          <option value="reduce">shared-memory reduction & barriers</option>
+          <option value="tile">tiled matrix multiply</option>
+        </select></label>
+        <label id="viz-opt-l">pattern <select id="viz-opt"></select></label>
+        <button id="viz-step">Step</button><button id="viz-reset">Reset</button>
+      </div>
+      <canvas class="viz" id="canvas" width="640" height="360"></canvas>
+      <div id="viz-info"></div>
+    </div>
+  </section>
+</main>
+<script type="module">
+import * as cuda from "../../dist/cuda.js";
+
+const $ = (id) => document.getElementById(id);
+const params = new URLSearchParams(location.search);
+const embedded = params.has("embed") || window.parent !== window;
+if (embedded) document.body.classList.add("embed");
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+// ------------------------------------------------------------------ examples
+const EXAMPLES = {
+  "vector add": { grid: [4], block: [256], args: { n: 1024 }, src: `__global__ void vector_add(const float* a, const float* b, float* c, int n) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;   // one thread per element
+    if (i < n) c[i] = a[i] + b[i];
+}` },
+  "shared-memory reduction": { grid: [8], block: [256], args: { n: 1 << 16 }, init: { out: "zeros" }, src: `template <int BLOCK>
+__global__ void block_sum(const float* in, float* out, int n) {
+    __shared__ float s[BLOCK];
+    float v = 0.0f;
+    for (int i = blockIdx.x * BLOCK + threadIdx.x; i < n; i += BLOCK * gridDim.x) v += in[i];  // grid-stride loop
+    s[threadIdx.x] = v;
+    __syncthreads();
+    for (int stride = BLOCK / 2; stride > 0; stride >>= 1) {      // tree reduction in shared memory
+        if (threadIdx.x < stride) s[threadIdx.x] += s[threadIdx.x + stride];
+        __syncthreads();                                         // every step waits for the whole block
+    }
+    if (threadIdx.x == 0) atomicAdd(out, s[0]);                  // one atomic per block
+}
+template __global__ void block_sum<256>(const float*, float*, int);`, kernel: "block_sum<256>", sizes: { out: 1 } },
+  "warp shuffle reduction": { grid: [8], block: [256], args: { n: 1 << 16 }, init: { out: "zeros" }, sizes: { out: 1 }, src: `__inline__ __device__ float warp_sum(float v) {
+    for (int o = 16; o > 0; o >>= 1) v += __shfl_down_sync(0xffffffff, v, o);   // no shared memory needed
+    return v;
+}
+__global__ void sum_warps(const float* in, float* out, int n) {
+    float v = 0.0f;
+    for (int i = blockIdx.x * blockDim.x + threadIdx.x; i < n; i += blockDim.x * gridDim.x) v += in[i];
+    v = warp_sum(v);
+    if ((threadIdx.x & 31) == 0) atomicAdd(out, v);             // lane 0 of every warp
+}` },
+  "tiled matmul": { grid: [4, 4], block: [16, 16], args: { M: 64, N: 64, K: 64 }, sizes: { A: 4096, B: 4096, C: 4096 }, src: `#define TILE 16
+__global__ void matmul_tiled(const float* A, const float* B, float* C, int M, int N, int K) {
+    __shared__ float As[TILE][TILE], Bs[TILE][TILE];
+    int row = blockIdx.y * TILE + threadIdx.y, col = blockIdx.x * TILE + threadIdx.x;
+    float acc = 0.0f;
+    for (int t = 0; t < K; t += TILE) {
+        As[threadIdx.y][threadIdx.x] = (row < M && t + threadIdx.x < K) ? A[row * K + t + threadIdx.x] : 0.0f;
+        Bs[threadIdx.y][threadIdx.x] = (col < N && t + threadIdx.y < K) ? B[(t + threadIdx.y) * N + col] : 0.0f;
+        __syncthreads();
+        #pragma unroll
+        for (int k = 0; k < TILE; ++k) acc += As[threadIdx.y][k] * Bs[k][threadIdx.x];
+        __syncthreads();
+    }
+    if (row < M && col < N) C[row * N + col] = acc;
+}` },
+  "histogram (atomics)": { grid: [4], block: [256], args: { n: 4096 }, init: { data: "randint" }, sizes: { hist: 16 }, src: `__global__ void histogram16(const unsigned* data, unsigned* hist, int n) {
+    __shared__ unsigned local[16];
+    if (threadIdx.x < 16) local[threadIdx.x] = 0;
+    __syncthreads();
+    for (int i = blockIdx.x * blockDim.x + threadIdx.x; i < n; i += blockDim.x * gridDim.x)
+        atomicAdd(&local[data[i] & 15], 1u);                     // fast shared-memory atomics
+    __syncthreads();
+    if (threadIdx.x < 16) atomicAdd(&hist[threadIdx.x], local[threadIdx.x]);
+}` },
+  "softmax (one block per row)": { grid: [8], block: [128], args: { cols: 512 }, sizes: { x: 4096, y: 4096 }, src: `__global__ void softmax_rows(const float* x, float* y, int cols) {
+    __shared__ float red[32];
+    const float* xr = x + blockIdx.x * cols; float* yr = y + blockIdx.x * cols;
+    float m = -INFINITY;
+    for (int c = threadIdx.x; c < cols; c += blockDim.x) m = fmaxf(m, xr[c]);
+    for (int o = 16; o > 0; o >>= 1) m = fmaxf(m, __shfl_xor_sync(0xffffffff, m, o));
+    if ((threadIdx.x & 31) == 0) red[threadIdx.x >> 5] = m;
+    __syncthreads();
+    m = red[0]; for (int w = 1; w < blockDim.x / 32; ++w) m = fmaxf(m, red[w]);
+    __syncthreads();
+    float s = 0.0f;
+    for (int c = threadIdx.x; c < cols; c += blockDim.x) s += __expf(xr[c] - m);
+    for (int o = 16; o > 0; o >>= 1) s += __shfl_xor_sync(0xffffffff, s, o);
+    if ((threadIdx.x & 31) == 0) red[threadIdx.x >> 5] = s;
+    __syncthreads();
+    s = 0.0f; for (int w = 0; w < blockDim.x / 32; ++w) s += red[w];
+    for (int c = threadIdx.x; c < cols; c += blockDim.x) yr[c] = __expf(xr[c] - m) / s;
+}` },
+  "printf & debugging": { grid: [2], block: [4], args: {}, sizes: { out: 8 }, src: `__global__ void hello(int* out) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    printf("block %d thread %d -> global %d\\n", blockIdx.x, threadIdx.x, i);
+    assert(i < 8);                                               // device-side assert
+    out[i] = i * i;
+}` },
+  "out-of-bounds bug": { grid: [1], block: [64], args: { n: 32 }, sizes: { a: 32 }, bounds: true, src: `// The guard is missing: threads 32..63 write past the end of 'a'.
+// With bounds checks on, the backend reports cudaErrorIllegalAddress with the faulting thread.
+__global__ void buggy(float* a, int n) {
+    int i = threadIdx.x;
+    a[i] = 1.0f;          // fix: if (i < n) a[i] = 1.0f;
+}` },
+};
+
+// ------------------------------------------------------------------ state
+let ctx = null, ctxKind = "", module = null, last = null;
+const status = (s, cls = "") => { $("status").textContent = s; $("status").className = cls; };
+const dtypeOf = (type) => {
+  const t = type.replace(/\b(const|volatile|__restrict__|restrict)\b/g, "").replace(/\*/g, "").trim();
+  return ({ float: "float32", double: "float64", int: "int32", "unsigned": "uint32", "unsigned int": "uint32", "short": "int16", "unsigned short": "uint16",
+    char: "int8", "signed char": "int8", "unsigned char": "uint8", "long long": "int64", "unsigned long long": "uint64", __half: "float16", half: "float16",
+    __nv_bfloat16: "bfloat16", int64_t: "int64", uint32_t: "uint32", int32_t: "int32", uint8_t: "uint8", int8_t: "int8", bool: "bool" })[t] ?? null;
+};
+
+async function getContext() {
+  const want = $("backend").value;
+  if (ctx && ctxKind === want) return ctx;
+  ctx?.destroy();
+  ctx = await cuda.createCudaContext({ device: want, workerURL: "../../dist/cuda-worker.js" });
+  ctxKind = want;
+  ctx.onPrintf = (s) => { printfBuf += s; };
+  const info = ctx.info();
+  status(`${ctx.selection.selected === "webgpu" ? "WebGPU" : "CPU (WebAssembly)"}: ${info.name}${ctx.selection.reasons.length ? ` — ${ctx.selection.reasons.join("; ")}` : ""}`);
+  return ctx;
+}
+let printfBuf = "";
+
+// ------------------------------------------------------------------ compile + argument table
+function showDiagnostics(list) {
+  $("diags").innerHTML = list.map((d) => `<div class="diag ${d.severity}" data-line="${d.loc?.line ?? ""}">${esc(d.loc ? `line ${d.loc.line}:${d.loc.col}: ` : "")}${esc(d.message)}</div>`).join("");
+}
+$("diags").onclick = (e) => {
+  const line = Number(e.target.closest(".diag")?.dataset.line);
+  if (!line) return;
+  const ta = $("src"), lines = ta.value.split("\n");
+  const start = lines.slice(0, line - 1).reduce((a, l) => a + l.length + 1, 0);
+  ta.focus(); ta.setSelectionRange(start, start + (lines[line - 1]?.length ?? 0));
+};
+
+async function compile() {
+  const c = await getContext();
+  try {
+    module = c.compile($("src").value, { mode: $("mode").value, boundsCheck: $("bounds").checked, name: "playground.cu" });
+    showDiagnostics(module.warnings ?? []);
+    return module;
+  } catch (e) {
+    module = null;
+    showDiagnostics(e.diagnostics ?? [{ severity: "error", message: e.message }]);
+    throw e;
+  }
+}
+
+function refreshKernels(preferred) {
+  let names = [];
+  try {
+    const parsed = cuda.parseModule($("src").value);
+    names = parsed.kernels.map((k) => k.template.length ? `${k.name}<${k.template.map(() => "?").join(", ")}>` : k.name);
+    showDiagnostics(parsed.warnings ?? []);
+    window.__sigs = Object.fromEntries(parsed.kernels.map((k) => [k.name, k]));
+  } catch (e) { showDiagnostics(e.diagnostics ?? [{ severity: "error", message: e.message }]); }
+  const sel = $("kernel"), keep = preferred ?? sel.value;
+  // template instantiations named in the source ("template __global__ void k<64>(...)") are offered directly
+  const inst = [...$("src").value.matchAll(/template\s+__global__\s+void\s+(\w+\s*<[^>]*>)/g)].map((m) => m[1].replace(/\s+/g, ""));
+  const all = [...new Set([...inst, ...names.filter((n) => !n.includes("?") || !inst.some((i) => i.startsWith(n.split("<")[0] + "<")))])];
+  sel.innerHTML = all.map((n) => `<option>${esc(n)}</option>`).join("");
+  if (keep && all.includes(keep)) sel.value = keep;
+  buildArgs();
+}
+
+function buildArgs() {
+  const name = $("kernel").value.split("<")[0];
+  const sig = window.__sigs?.[name];
+  const ex = EXAMPLES[$("example").value] ?? {};
+  const tb = $("args").querySelector("tbody");
+  const old = Object.fromEntries([...tb.querySelectorAll("tr")].map((tr) => [tr.dataset.name, tr]));
+  tb.innerHTML = "";
+  if (!sig) return;
+  const scalars = { ...(ex.args ?? {}) };
+  const defaultN = Number(Object.values(scalars)[0] ?? 1024);
+  for (const p of sig.params) {
+    const tr = document.createElement("tr");
+    tr.dataset.name = p.name;
+    const dt = dtypeOf(p.type);
+    if (p.pointer) {
+      tr.dataset.kind = "buf";
+      const n = old[p.name]?.querySelector(".n")?.value ?? ex.sizes?.[p.name] ?? defaultN;
+      const init = old[p.name]?.querySelector(".init")?.value ?? ex.init?.[p.name] ?? (p.isConst ? "rand" : "zeros");
+      tr.innerHTML = `<td><code>${esc(p.type)} ${esc(p.name)}</code></td><td><select class="dt">${["float32", "float64", "float16", "int32", "uint32", "int64", "int8", "uint8"].map((d) => `<option${d === (dt ?? "float32") ? " selected" : ""}>${d}</option>`).join("")}</select></td>
+        <td><input class="n" type="number" min="1" value="${n}"></td><td><select class="init">${["zeros", "ones", "rand", "arange", "randint"].map((v) => `<option${v === init ? " selected" : ""}>${v}</option>`).join("")}</select></td>`;
+    } else {
+      tr.dataset.kind = "scalar";
+      const v = old[p.name]?.querySelector(".v")?.value ?? scalars[p.name] ?? (dt?.startsWith("float") ? 1 : defaultN);
+      tr.innerHTML = `<td><code>${esc(p.type)} ${esc(p.name)}</code></td><td colspan="3"><input class="v" value="${esc(v)}"></td>`;
+    }
+    tb.appendChild(tr);
+  }
+}
+
+function makeArgs(c) {
+  const rows = [...$("args").querySelectorAll("tbody tr")];
+  let seed = 1;
+  return rows.map((tr) => {
+    if (tr.dataset.kind === "scalar") { const s = tr.querySelector(".v").value.trim(); return /^-?\d+$/.test(s) ? Number(s) : Number(s); }
+    const n = Math.max(1, Number(tr.querySelector(".n").value) | 0), dt = tr.querySelector(".dt").value, init = tr.querySelector(".init").value;
+    let host;
+    const r = ((x) => () => { x = (x * 1664525 + 1013904223) >>> 0; return x / 2 ** 32; })(seed++ * 7919);
+    if (init === "zeros") return { name: tr.dataset.name, t: c.zeros([n], dt) };
+    if (init === "ones") host = Array.from({ length: n }, () => 1);
+    if (init === "arange") host = Array.from({ length: n }, (_, i) => i);
+    if (init === "rand") host = Array.from({ length: n }, () => (dt.startsWith("float") ? r() : Math.floor(r() * 100)));
+    if (init === "randint") host = Array.from({ length: n }, () => Math.floor(r() * 1000));
+    return { name: tr.dataset.name, t: c.tensor(cuda.toHost(dt, host), [n], dt) };
+  });
+}
+
+const dims = (p) => [Number($(p + "x").value) || 1, Number($(p + "y").value) || 1, Number($(p + "z").value) || 1];
+
+// ------------------------------------------------------------------ run
+async function run({ quiet = false } = {}) {
+  $("run").disabled = $("bench").disabled = true;
+  $("summary").textContent = "running…"; $("output").textContent = "";
+  printfBuf = "";
+  const t0 = performance.now();
+  let args = [];
+  try {
+    const m = await compile();
+    const c = ctx;
+    const kernel = $("kernel").value;
+    args = makeArgs(c);
+    const launch = { kernel, grid: dims("g"), block: dims("b"), args: args.map((a) => a.t ?? a), timing: true };
+    await m.launch(launch);
+    const rep = await c.synchronize();
+    const total = performance.now() - t0;
+    const k = rep.kernelTimes.at(-1);
+    let out = "";
+    for (const a of args) if (a.t) {
+      const v = Array.from(await a.t.toArray(), Number);
+      out += `${a.name} [${a.t.dtype} × ${a.t.size}]\n  ${v.slice(0, 32).map((x) => (Number.isInteger(x) ? x : x.toPrecision(5))).join(", ")}${v.length > 32 ? ", …" : ""}\n`;
+    }
+    if (printfBuf) out = `printf output:\n${printfBuf}\n` + out;
+    $("output").textContent = out;
+    $("summary").innerHTML = `<span class="ok">✓ ran</span> <b>${esc(kernel)}</b> on ${esc(c.info().name)} — grid ${dims("g").join("×")}, block ${dims("b").join("×")} · kernel ${k?.ms != null ? k.ms.toFixed(3) + " ms (GPU timestamp)" : k?.wallMs != null ? k.wallMs.toFixed(3) + " ms" : "–"} · total ${total.toFixed(1)} ms incl. compile + transfers`;
+    last = { ok: true, kernel, output: Object.fromEntries(await Promise.all(args.filter((a) => a.t).map(async (a) => [a.name, Array.from(await a.t.toArray(), Number)]))), printf: printfBuf, ms: k?.ms ?? k?.wallMs ?? null };
+    await inspect();
+  } catch (e) {
+    ctx?.backend?.resetError?.();
+    $("summary").innerHTML = `<span class="bad">✗ ${esc(e.name === "CompileError" ? "compile error" : "error")}</span>`;
+    $("output").textContent = (printfBuf ? `printf output:\n${printfBuf}\n` : "") + e.message;
+    last = { ok: false, error: e.message, printf: printfBuf };
+  } finally {
+    for (const a of args) a.t?.free();
+    $("run").disabled = $("bench").disabled = false;
+    if (!quiet) notifyParent({ type: "tgjs-cuda:result", ...last });
+  }
+  return last;
+}
+
+async function inspect() {
+  if (!module) return;
+  try {
+    const r = await module.inspect($("kernel").value, dims("b"), "all");
+    $("ir").textContent = r.ir;
+    $("code").textContent = r.code;
+    $("code-notes").textContent = `${ctx.selection.selected === "webgpu" ? "WGSL" : "WebAssembly"} generated for block ${dims("b").join("×")}${r.notes.length ? " · " + r.notes.join(" · ") : ""}`;
+  } catch (e) { $("ir").textContent = $("code").textContent = e.message; }
+}
+
+// ------------------------------------------------------------------ benchmark across backends
+async function bench() {
+  $("run").disabled = $("bench").disabled = true;
+  $("summary").textContent = "benchmarking…";
+  const rows = [];
+  const results = {};
+  for (const [label, device] of [["WebGPU", "webgpu"], ["CPU, worker pool", "cpu"], ["CPU, 1 thread", "cpu1"]]) {
+    let c;
+    try {
+      c = await cuda.createCudaContext(device === "cpu1" ? { device: "cpu", threads: 0 } : { device, workerURL: "../../dist/cuda-worker.js" });
+      c.onPrintf = () => {};
+      const m = c.compile($("src").value, { mode: $("mode").value });
+      const args = makeArgs(c);
+      const L = { kernel: $("kernel").value, grid: dims("g"), block: dims("b"), args: args.map((a) => a.t ?? a) };
+      let t = performance.now(); await m.launch(L); await c.synchronize(); const first = performance.now() - t;
+      const times = [];
+      for (let i = 0; i < 7; i++) { t = performance.now(); for (let r = 0; r < 5; r++) await m.launch(L); await c.synchronize(); times.push((performance.now() - t) / 5); }
+      times.sort((a, b) => a - b);
+      const outs = await Promise.all(args.filter((a) => a.t).map(async (a) => Array.from(await a.t.toArray(), Number)));
+      results[label] = outs;
+      rows.push({ label, name: c.info().name, first, med: times[3] });
+      for (const a of args) a.t?.free();
+    } catch (e) { rows.push({ label, error: e.message }); }
+    finally { c?.destroy(); }
+  }
+  const ref = Object.values(results)[0];
+  const diff = (o) => Math.max(0, ...o.flatMap((buf, i) => buf.map((v, j) => Math.abs(v - ref[i][j]) / Math.max(1, Math.abs(ref[i][j])))));
+  $("summary").innerHTML = `<table><tr><th>backend</th><th>steady ms/launch</th><th>first launch (incl. compile)</th><th>vs first backend</th></tr>${rows.map((r) => r.error
+    ? `<tr><td>${esc(r.label)}</td><td colspan="3" class="bad">${esc(r.error.slice(0, 160))}</td></tr>`
+    : `<tr><td>${esc(r.label)}<br><span class="muted">${esc(r.name)}</span></td><td class="stat">${r.med.toFixed(3)}</td><td class="stat">${r.first.toFixed(1)} ms</td><td class="stat">${results[r.label] && ref ? `max rel. diff ${diff(results[r.label]).toExponential(1)}` : "–"}</td></tr>`).join("")}</table>
+    <p class="hint">Medians on this machine and browser. Float results may differ in the last bits between backends (different operation order and fast-math in GPU shader compilers).</p>`;
+  $("run").disabled = $("bench").disabled = false;
+}
+
+// ------------------------------------------------------------------ educational visualizations
+const cv = $("canvas"), g2 = cv.getContext("2d");
+const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+let vizStep = 0, vizHover = null;
+const VIZ_OPTS = { index: ["1D", "2D"], coalesce: ["a[i] (unit stride)", "a[2*i] (stride 2)", "a[32*i] (stride 32)", "a[i] misaligned (+1)", "transpose read a[i*N]"], reduce: ["interleaved (s[t] += s[t+stride])"], tile: ["16×16 tiles of 64×64"] };
+function vizOptions() {
+  const v = $("viz").value;
+  $("viz-opt").innerHTML = VIZ_OPTS[v].map((o, i) => `<option value="${i}">${o}</option>`).join("");
+  $("viz-step").hidden = !(v === "reduce" || v === "tile");
+  vizStep = 0; drawViz();
+}
+function fit() { const w = cv.clientWidth || 640; cv.width = w * devicePixelRatio; cv.height = Math.round(w * 0.56) * devicePixelRatio; g2.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0); return [w, Math.round(w * 0.56)]; }
+const warpColor = (w) => [css("--v0"), css("--v1"), css("--v2"), css("--v3")][w % 4];
+
+function drawViz() {
+  const [W, H] = fit();
+  g2.clearRect(0, 0, W, H);
+  g2.font = "11px system-ui"; g2.textBaseline = "middle";
+  const v = $("viz").value, opt = Number($("viz-opt").value || 0);
+  const info = $("viz-info");
+  if (v === "index") {
+    const twoD = opt === 1;
+    const grid = twoD ? [3, 2] : [4, 1], block = twoD ? [8, 8] : [64, 1];
+    const pad = 8, bw = (W - pad * (grid[0] + 1)) / grid[0], bh = (H - 24 - pad * (grid[1] + 1)) / grid[1];
+    const cw = bw / block[0], ch = Math.min(bh / block[1], twoD ? bh / block[1] : bh);
+    const cells = [];
+    for (let by = 0; by < grid[1]; by++) for (let bx = 0; bx < grid[0]; bx++) {
+      const x0 = pad + bx * (bw + pad), y0 = 20 + pad + by * (bh + pad);
+      g2.fillStyle = css("--muted"); g2.fillText(`blockIdx (${bx},${by})`, x0, y0 - 9);
+      for (let ty = 0; ty < block[1]; ty++) for (let tx = 0; tx < block[0]; tx++) {
+        const lin = ty * block[0] + tx, warp = lin >> 5;
+        const x = x0 + tx * cw, y = y0 + ty * (twoD ? ch : bh);
+        const hov = vizHover && vizHover.bx === bx && vizHover.by === by && vizHover.tx === tx && vizHover.ty === ty;
+        g2.fillStyle = hov ? css("--text") : warpColor(warp); g2.globalAlpha = hov ? 1 : 0.35 + 0.65 * ((lin & 31) / 31);
+        g2.fillRect(x + 0.5, y + 0.5, cw - 1, (twoD ? ch : bh) - 1); g2.globalAlpha = 1;
+        cells.push({ x, y, w: cw, h: twoD ? ch : bh, bx, by, tx, ty, lin, warp });
+      }
+    }
+    cv._cells = cells;
+    const h = vizHover;
+    info.textContent = h ? (twoD
+      ? `threadIdx=(${h.tx},${h.ty}) blockIdx=(${h.bx},${h.by})\ncol = blockIdx.x*blockDim.x + threadIdx.x = ${h.bx * block[0] + h.tx}   row = blockIdx.y*blockDim.y + threadIdx.y = ${h.by * block[1] + h.ty}\nlinear thread id in block = ${h.lin} → warp ${h.warp}, lane ${h.lin & 31}`
+      : `threadIdx.x=${h.tx} blockIdx.x=${h.bx}\ni = blockIdx.x * blockDim.x + threadIdx.x = ${h.bx * block[0] + h.tx}\nwarp ${h.warp} of the block, lane ${h.lin & 31}`)
+      : `Hover a thread. Colors are warps: 32 consecutive threads (by linear id x + y·blockDim.x) execute together.`;
+  } else if (v === "coalesce") {
+    const addr = (i) => [i, 2 * i, 32 * i, i + 1, i * 64][opt] * 4;  // byte address of thread i's float
+    const segs = new Set(Array.from({ length: 32 }, (_, i) => Math.floor(addr(i) / 32)));
+    const maxB = Math.max(...Array.from({ length: 32 }, (_, i) => addr(i))) + 4, span = Math.max(256, Math.ceil(maxB / 32) * 32);
+    const rowB = Math.min(span, 512), rows = Math.ceil(span / rowB), segW = (W - 20) / (rowB / 32), rh = Math.min(40, (H - 80) / rows);
+    g2.fillStyle = css("--muted"); g2.fillText("one warp (32 threads), each loading one float", 10, 12);
+    for (let i = 0; i < 32; i++) { g2.fillStyle = css("--v0"); g2.fillRect(10 + i * ((W - 20) / 32), 22, (W - 20) / 32 - 2, 14); }
+    g2.fillStyle = css("--muted"); g2.fillText(`memory: 32-byte segments (${segs.size} touched)`, 10, 52);
+    for (let s = 0; s < span / 32; s++) {
+      const r = Math.floor((s * 32) / rowB), c = s - (r * rowB) / 32;
+      g2.fillStyle = segs.has(s) ? css("--v1") : css("--dim");
+      g2.fillRect(10 + c * segW, 62 + r * (rh + 4), segW - 2, rh);
+    }
+    const useful = 32 * 4, moved = segs.size * 32;
+    info.textContent = `${segs.size} memory transaction(s) of 32 bytes for 128 useful bytes → efficiency ${(100 * useful / moved).toFixed(0)}%.\n` +
+      ["Consecutive threads read consecutive addresses: the warp's loads merge into 4 segments (fully coalesced).", "Stride 2 wastes half of every segment.", "Stride 32: every thread needs its own segment — 8× the traffic.", "Misaligned start: one extra segment.", "Column reads of a row-major matrix (transpose pattern): one segment per thread; tile through shared memory instead."][opt];
+  } else if (v === "reduce") {
+    const n = 16, steps = [16, 8, 4, 2, 1];
+    const vals = Array.from({ length: n }, (_, i) => i + 1);
+    const cur = vals.slice();
+    for (let s = 0; s < vizStep && s < 4; s++) { const st = n >> (s + 1); for (let t = 0; t < st; t++) cur[t] += cur[t + st]; }
+    const w = (W - 20) / n, active = vizStep < 4 ? n >> (vizStep + 1) : 0;
+    for (let lvl = 0; lvl <= Math.min(vizStep, 4); lvl++) {
+      const row = vals.slice();
+      for (let s = 0; s < lvl; s++) { const st = n >> (s + 1); for (let t = 0; t < st; t++) row[t] += row[t + st]; }
+      const y = 16 + lvl * ((H - 30) / 5);
+      for (let i = 0; i < n; i++) {
+        const live = i < steps[lvl];
+        g2.fillStyle = live ? warpColor(lvl) : css("--dim"); g2.globalAlpha = live ? 0.85 : 0.5;
+        g2.fillRect(10 + i * w, y, w - 3, 22); g2.globalAlpha = 1;
+        if (live) { g2.fillStyle = css("--bg"); g2.textAlign = "center"; g2.fillText(String(row[i]), 10 + i * w + w / 2 - 1, y + 11); g2.textAlign = "left"; }
+      }
+      if (lvl < Math.min(vizStep, 4)) { g2.fillStyle = css("--muted"); g2.fillText(`__syncthreads()   stride = ${n >> (lvl + 1)}`, 10, y + 32); }
+    }
+    info.textContent = vizStep >= 4 ? `Done: s[0] = ${cur[0]} = 1+2+…+${n}. log2(${n}) = 4 steps, each followed by a barrier.`
+      : `Step ${vizStep}: threads 0..${active - 1} do s[t] += s[t + ${active}] while the rest idle; then all ${n} threads wait at __syncthreads() before the next step reads the results.`;
+  } else if (v === "tile") {
+    const N = 4, k = Math.min(vizStep, N), out = [1, 2];  // output tile (row block 1, col block 2)
+    const size = Math.min((W - 60) / 3, H - 40), cell = size / N, gap = 20;
+    const draw = (x0, label, hl) => {
+      g2.fillStyle = css("--muted"); g2.fillText(label, x0, 10);
+      for (let r = 0; r < N; r++) for (let c = 0; c < N; c++) {
+        const h = hl(r, c);
+        g2.fillStyle = h === 2 ? css("--v1") : h === 1 ? css("--v0") : css("--dim"); g2.globalAlpha = h ? 0.9 : 0.6;
+        g2.fillRect(x0 + c * cell, 20 + r * cell, cell - 2, cell - 2); g2.globalAlpha = 1;
+      }
+    };
+    const t = Math.min(k, N - 1);
+    draw(10, "A (64×64, 16×16 tiles)", (r, c) => (r === out[0] ? (c === t && k < N ? 2 : c < k ? 1 : 0) : 0));
+    draw(10 + size + gap, "B", (r, c) => (c === out[1] ? (r === t && k < N ? 2 : r < k ? 1 : 0) : 0));
+    draw(10 + 2 * (size + gap), "C", (r, c) => (r === out[0] && c === out[1] ? (k >= N ? 1 : 2) : 0));
+    info.textContent = k >= N ? `C tile (${out[0]},${out[1]}) is complete: ${N} tile loads each from A and B instead of 64 global loads per element per operand.`
+      : `Step ${k}: the block (256 threads) loads A tile (${out[0]},${t}) and B tile (${t},${out[1]}) into __shared__ memory, __syncthreads(), then every thread multiplies 16 pairs from shared memory; __syncthreads() before the next tile overwrites them.`;
+  }
+}
+cv.addEventListener("mousemove", (e) => {
+  if ($("viz").value !== "index" || !cv._cells) return;
+  const r = cv.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
+  vizHover = cv._cells.find((c) => x >= c.x && x < c.x + c.w && y >= c.y && y < c.y + c.h) ?? null;
+  drawViz();
+});
+$("viz").onchange = vizOptions;
+$("viz-opt").onchange = () => { vizStep = 0; drawViz(); };
+$("viz-step").onclick = () => { vizStep++; drawViz(); };
+$("viz-reset").onclick = () => { vizStep = 0; drawViz(); };
+addEventListener("resize", () => { if (!$("canvas").closest("[hidden]")) drawViz(); });
+
+// ------------------------------------------------------------------ wiring
+function loadExample(name) {
+  const ex = EXAMPLES[name];
+  $("src").value = ex.src;
+  const [gx = 1, gy = 1, gz = 1] = ex.grid, [bx = 1, by = 1, bz = 1] = ex.block;
+  Object.entries({ gx, gy, gz, bx, by, bz }).forEach(([k, v]) => { $(k).value = v; });
+  $("bounds").checked = Boolean(ex.bounds);
+  $("args").querySelector("tbody").innerHTML = "";
+  refreshKernels(ex.kernel);
+}
+$("example").innerHTML = Object.keys(EXAMPLES).map((n) => `<option>${esc(n)}</option>`).join("");
+$("example").onchange = () => loadExample($("example").value);
+let debounce;
+$("src").addEventListener("input", () => { clearTimeout(debounce); debounce = setTimeout(() => refreshKernels(), 400); });
+$("src").addEventListener("keydown", (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); run(); }
+  if (e.key === "Tab") { e.preventDefault(); const ta = e.target, s = ta.selectionStart; ta.setRangeText("    ", s, ta.selectionEnd, "end"); }
+});
+$("kernel").onchange = buildArgs;
+$("run").onclick = () => run();
+$("bench").onclick = bench;
+$("backend").onchange = async () => { try { await getContext(); } catch (e) { status(e.message, "bad"); } };
+$("tabs").onclick = (e) => {
+  const t = e.target.dataset.tab; if (!t) return;
+  for (const b of $("tabs").children) b.classList.toggle("on", b.dataset.tab === t);
+  for (const p of document.querySelectorAll("[data-pane]")) p.hidden = p.dataset.pane !== t;
+  if (t === "learn") drawViz();
+};
+
+// ------------------------------------------------------------------ embedding: postMessage API
+// Parent pages may send { type: "tgjs-cuda:set", source, kernel?, grid?, block?, args?: {name: value|{n, init, dtype}} },
+// { type: "tgjs-cuda:run" } and { type: "tgjs-cuda:get" }; replies go to the sender's window and origin. Restrict accepted
+// origins with ?origin=https://a.example,https://b.example. Messages only change and run code inside this page.
+const allowed = (params.get("origin") ?? "").split(",").filter(Boolean);
+let parentOrigin = null;
+function notifyParent(msg) { if (embedded && parentOrigin) window.parent.postMessage(msg, parentOrigin); }
+addEventListener("message", async (e) => {
+  if (e.source !== window.parent || (allowed.length && !allowed.includes(e.origin))) return;
+  const m = e.data;
+  if (!m || typeof m.type !== "string" || !m.type.startsWith("tgjs-cuda:")) return;
+  parentOrigin = e.origin;
+  const reply = (x) => e.source.postMessage({ id: m.id, ...x }, e.origin);
+  if (m.type === "tgjs-cuda:set") {
+    if (typeof m.source === "string") $("src").value = m.source;
+    if (m.grid) [m.grid].flat().forEach((v, i) => { $("g" + "xyz"[i]).value = v; });
+    if (m.block) [m.block].flat().forEach((v, i) => { $("b" + "xyz"[i]).value = v; });
+    refreshKernels(m.kernel);
+    for (const [name, val] of Object.entries(m.args ?? {})) {
+      const tr = $("args").querySelector(`tr[data-name="${CSS.escape(name)}"]`);
+      if (!tr) continue;
+      if (tr.dataset.kind === "scalar") tr.querySelector(".v").value = val;
+      else { if (val.n) tr.querySelector(".n").value = val.n; if (val.init) tr.querySelector(".init").value = val.init; if (val.dtype) tr.querySelector(".dt").value = val.dtype; }
+    }
+    reply({ type: "tgjs-cuda:ready", kernels: [...$("kernel").options].map((o) => o.value) });
+  } else if (m.type === "tgjs-cuda:run") reply({ ...(await run({ quiet: true })), type: "tgjs-cuda:result" });
+  else if (m.type === "tgjs-cuda:get") reply({ type: "tgjs-cuda:state", source: $("src").value, kernel: $("kernel").value, grid: dims("g"), block: dims("b"), backend: ctx?.selection });
+});
+
+// ------------------------------------------------------------------ start
+try {
+  if (params.get("backend")) $("backend").value = params.get("backend");
+  $("example").value = params.get("example") && EXAMPLES[params.get("example")] ? params.get("example") : "vector add";
+  loadExample($("example").value);
+  vizOptions();
+  await getContext();
+  $("run").disabled = $("bench").disabled = false;
+  if (embedded) window.parent.postMessage({ type: "tgjs-cuda:loaded" }, "*");
+} catch (e) { status(`could not start: ${e.message}`, "bad"); }
+</script>
+</body>
+</html>

@@ -27,8 +27,8 @@ fs.writeFileSync(path.join(root, "src/generated/python.ts"),
 // 2. bundle
 fs.rmSync(dist, { recursive: true, force: true });
 const common = { bundle: true, format: "esm", target: "es2022", sourcemap: true, logLevel: "warning", legalComments: "inline" };
-await esbuild.build({ ...common, entryPoints: { index: "src/index.ts", worker: "src/worker.ts", bridge: "src/bridge.ts" }, outdir: dist,
-  absWorkingDir: root, splitting: false });
+await esbuild.build({ ...common, entryPoints: { index: "src/index.ts", worker: "src/worker.ts", bridge: "src/bridge.ts", cuda: "src/cuda/index.ts",
+  "cuda-worker": "src/cuda/runtime/wasm-worker.ts" }, outdir: dist, absWorkingDir: root, splitting: false });
 
 // 3. type declarations
 execFileSync(path.join(root, "node_modules/.bin/tsc"), ["-p", "tsconfig.json", "--emitDeclarationOnly"], { cwd: root, stdio: "inherit" });

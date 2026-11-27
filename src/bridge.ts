@@ -12,6 +12,7 @@
  * operation whose queue ordering matters (queue.writeBuffer, readback, sync) and when it grows past `maxBatch`.
  */
 import type { DeviceInfo, GpuStats } from "./types.js";
+import type { GpuQueue } from "./cuda/runtime/webgpu.js";
 
 const STORAGE = 0x80, COPY_SRC = 0x04, COPY_DST = 0x08, MAP_READ = 0x01, UNIFORM = 0x40, COMPUTE = 0x4;
 
@@ -79,7 +80,7 @@ export class WebGPUBridge {
     if (!gpu) throw new Error("WebGPU is not available in this context (navigator.gpu is undefined)");
     const adapter = await gpu.requestAdapter({ powerPreference: opts.powerPreference ?? "high-performance" });
     if (!adapter) throw new Error("WebGPU is available but no GPU adapter was returned (requestAdapter() gave null)");
-    const wanted: GPUFeatureName[] = ["shader-f16", "timestamp-query"];
+    const wanted = ["shader-f16", "timestamp-query", "subgroups"] as GPUFeatureName[];
     const features = wanted.filter((f) => adapter.features.has(f));
     // ask for the adapter's full limits, as upstream tinygrad's native WEBGPU backend does
     const requiredLimits: Record<string, number> = {};
@@ -88,7 +89,7 @@ export class WebGPUBridge {
       if (typeof v === "number") requiredLimits[key] = v;
     }
     const device = await adapter.requestDevice({ requiredFeatures: features, requiredLimits });
-    const ai = (adapter as GPUAdapter & { info?: GPUAdapterInfo }).info;
+    const ai = (adapter as GPUAdapter & { info?: GPUAdapterInfo & { subgroupMinSize?: number; subgroupMaxSize?: number } }).info;
     const info: DeviceInfo = {
       vendor: ai?.vendor ?? "", architecture: ai?.architecture ?? "", device: ai?.device ?? "", description: ai?.description ?? "",
       isFallbackAdapter: Boolean((ai as unknown as { isFallbackAdapter?: boolean })?.isFallbackAdapter ??
@@ -103,7 +104,10 @@ export class WebGPUBridge {
         maxComputeWorkgroupsPerDimension: device.limits.maxComputeWorkgroupsPerDimension,
       },
     };
-    return new WebGPUBridge(device, info, opts);
+    const bridge = new WebGPUBridge(device, info, opts);
+    bridge.adapterDetails = { vendor: ai?.vendor, architecture: ai?.architecture, description: ai?.description, isFallbackAdapter: info.isFallbackAdapter,
+      subgroupMinSize: ai?.subgroupMinSize, subgroupMaxSize: ai?.subgroupMaxSize };
+    return bridge;
   }
 
   // ------------------------------------------------------------------ info / errors
@@ -348,6 +352,42 @@ export class WebGPUBridge {
     this.check();
     const err = this.takeErrors();
     if (err) throw new Error(err);
+  }
+
+  // ------------------------------------------------------------------ CUDA kernels (src/cuda)
+
+  /** The GPUBuffer behind a tinygrad buffer handle (zero-copy access for CUDA kernels). */
+  gpuBuffer(id: number): GPUBuffer { return this.getBuffer(id); }
+  /** Adapter details the CUDA runtime needs (subgroup sizes, fallback flag). */
+  adapterDetails: { vendor?: string; architecture?: string; description?: string; isFallbackAdapter?: boolean; subgroupMinSize?: number; subgroupMaxSize?: number } = {};
+
+  /**
+   * A GpuQueue that records CUDA kernel dispatches into the same batched compute pass as tinygrad's kernels, so the two
+   * share one ordered command stream.
+   */
+  cudaQueue(): GpuQueue {
+    const self = this;
+    return {
+      device: this.device,
+      dispatch(pipeline, bindGroup, x, y, z, ts) {
+        self.check();
+        if (ts) {
+          self.flush((enc) => { const p = enc.beginComputePass({ timestampWrites: ts }); p.setPipeline(pipeline); p.setBindGroup(0, bindGroup); p.dispatchWorkgroups(x, y, z); p.end(); });
+          return;
+        }
+        if (!self.pass) { self.encoder = self.device.createCommandEncoder(); self.pass = self.encoder.beginComputePass(); }
+        self.pass.setPipeline(pipeline);
+        self.pass.setBindGroup(0, bindGroup);
+        self.pass.dispatchWorkgroups(x, y, z);
+        self.pending++;
+        self.counters.kernelsDispatched++;
+        if (self.pending >= self.maxBatch) self.flush();
+      },
+      encode(f) { self.flush(f); },
+      writeBuffer(buf, off, data) { self.flush(); self.device.queue.writeBuffer(buf, off, data.buffer as ArrayBuffer, data.byteOffset, data.byteLength); },
+      flush() { self.flush(); },
+      deferDestroy(buf) { if (self.pending) self.deferredDestroy.push(buf); else buf.destroy(); },
+    };
   }
 
   /** Free everything. The bridge cannot be used afterwards. */
